@@ -1,0 +1,31 @@
+{
+  "name": "descartables-yofre-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node src/db/migrate.js",
+    "db:check": "node src/db/check.js",
+    "db:restore-costs": "node src/db/patches/restore-product-costs-from-excel.js",
+    "db:seed": "node src/db/seed.js",
+    "db:reset": "node src/db/reset.js",
+    "db:patch-codbarra": "node src/db/patches/add-codbarra.js",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.44.2",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.1"
+  }
+}

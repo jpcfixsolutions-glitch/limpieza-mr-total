@@ -1,0 +1,127 @@
+@import './tailwind.css';
+
+:root {
+  --color-background: #f7f5fb;
+  --color-surface: #ffffff;
+  --color-elevated: #eee9f5;
+  --color-primary: #6b21a8;
+  --color-secondary: #7e22ce;
+  --color-success: #047857;
+  --color-foreground: #251536;
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #c9bfd7 #f7f5fb;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #f7f5fb;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #c9bfd7;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #6b21a8;
+}
+
+/* Superficies claras: los bordes que antes se confundían con fondos oscuros
+   conservan una separación suave pero visible en cards, tablas e inputs. */
+.border-surface {
+  border-color: color-mix(in srgb, var(--color-foreground) 14%, transparent);
+}
+
+/* Los controles destacados siguen usando el violeta de la marca, con texto
+   blanco para conservar contraste sobre una superficie de color. */
+.bg-primary.text-foreground,
+.bg-secondary.text-foreground,
+.bg-success.text-foreground,
+button.bg-primary:not(:disabled),
+button.bg-secondary:not(:disabled),
+button.bg-success:not(:disabled) {
+  color: #fff;
+}
+
+button[class*="hover:bg-primary"]:hover,
+button[class*="hover:bg-secondary"]:hover,
+button[class*="hover:bg-success"]:hover {
+  color: #fff;
+}
+
+button:disabled {
+  color: color-mix(in srgb, var(--color-foreground) 45%, transparent) !important;
+}
+
+/* Cada card responde a su propio ancho. Esto evita que la sidebar expandida
+   convierta nombres largos en columnas angostas. */
+.product-card {
+  container-type: inline-size;
+}
+
+.product-card__details {
+  flex: 1 1 22rem;
+  min-width: 15rem;
+}
+
+.product-card__actions {
+  flex: 0 1 auto;
+}
+
+@container (max-width: 780px) {
+  .product-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .product-card__details {
+    min-width: 0;
+  }
+
+  .product-card__actions {
+    width: 100%;
+    max-width: none;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  .product-card__actions > button {
+    flex: 1 1 8rem;
+  }
+}
+
+@container (max-width: 430px) {
+  .product-card__actions > button {
+    flex-basis: 100%;
+  }
+}
+
+/* Ocultar scrollbar horizontal en filtros de categoría */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Safe area para dispositivos con notch (iOS) */
+.safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

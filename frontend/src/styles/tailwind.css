@@ -1,0 +1,12 @@
+@import 'tailwindcss' source(none);
+@source '../**/*.{js,jsx}';
+
+@theme {
+  --color-background: #f7f5fb;
+  --color-surface: #ffffff;
+  --color-elevated: #eee9f5;
+  --color-primary: #6b21a8;
+  --color-secondary: #7e22ce;
+  --color-success: #047857;
+  --color-foreground: #251536;
+}
