@@ -2,11 +2,12 @@
 @source '../**/*.{js,jsx}';
 
 @theme {
-  --color-background: #f7f5fb;
+  --color-background: #f5f6f8;
   --color-surface: #ffffff;
-  --color-elevated: #eee9f5;
-  --color-primary: #6b21a8;
-  --color-secondary: #7e22ce;
+  --color-elevated: #d8e4f5;
+  --color-sidebar: #d8e4f5;
+  --color-primary: #b5121b;
+  --color-secondary: #e51c23;
   --color-success: #047857;
-  --color-foreground: #251536;
+  --color-foreground: #252936;
 }

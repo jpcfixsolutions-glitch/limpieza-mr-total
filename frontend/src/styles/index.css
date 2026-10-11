@@ -1,13 +1,14 @@
 @import './tailwind.css';
 
 :root {
-  --color-background: #f7f5fb;
+  --color-background: #f5f6f8;
   --color-surface: #ffffff;
-  --color-elevated: #eee9f5;
-  --color-primary: #6b21a8;
-  --color-secondary: #7e22ce;
+  --color-elevated: #d8e4f5;
+  --color-sidebar: #d8e4f5;
+  --color-primary: #b5121b;
+  --color-secondary: #e51c23;
   --color-success: #047857;
-  --color-foreground: #251536;
+  --color-foreground: #252936;
   color-scheme: light;
 }
 
@@ -21,7 +22,7 @@ body,
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #c9bfd7 #f7f5fb;
+  scrollbar-color: #b9c7d9 #f5f6f8;
 }
 
 *::-webkit-scrollbar {
@@ -30,16 +31,16 @@ body,
 }
 
 *::-webkit-scrollbar-track {
-  background: #f7f5fb;
+  background: #f5f6f8;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #c9bfd7;
+  background: #b9c7d9;
   border-radius: 999px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: #6b21a8;
+  background: #b5121b;
 }
 
 /* Superficies claras: los bordes que antes se confundían con fondos oscuros
@@ -48,8 +49,8 @@ body,
   border-color: color-mix(in srgb, var(--color-foreground) 14%, transparent);
 }
 
-/* Los controles destacados siguen usando el violeta de la marca, con texto
-   blanco para conservar contraste sobre una superficie de color. */
+/* Los controles destacados usan el rojo de Mr.Total con texto blanco para
+   conservar contraste sobre una superficie de color. */
 .bg-primary.text-foreground,
 .bg-secondary.text-foreground,
 .bg-success.text-foreground,
@@ -67,6 +68,11 @@ button[class*="hover:bg-success"]:hover {
 
 button:disabled {
   color: color-mix(in srgb, var(--color-foreground) 45%, transparent) !important;
+}
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--color-secondary) 35%, transparent);
+  outline-offset: 2px;
 }
 
 /* Cada card responde a su propio ancho. Esto evita que la sidebar expandida

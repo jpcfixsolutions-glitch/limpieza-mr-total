@@ -40,7 +40,7 @@ export default function App() {
   const [transactions, setTransactions] = useState([]);
 
   useEffect(() => {
-    document.title = "Descartables Yofre";
+    document.title = "Mr.Total";
     if (user) {
       fetchCajaStatus(true);
     }

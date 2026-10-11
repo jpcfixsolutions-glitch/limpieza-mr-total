@@ -586,9 +586,9 @@ export function InventarioView() {
                     row.description,
                   ].filter(Boolean).join("\n");
                   return (
-                    <tr key={row.rowId} className="border-b border-foreground/15 bg-violet-500/[0.08] hover:bg-violet-500/[0.14] transition-colors">
+                    <tr key={row.rowId} className="border-b border-foreground/15 bg-primary/[0.06] hover:bg-primary/[0.1] transition-colors">
                       <td className="p-4"><span className="block w-4 h-4" title="Las promociones no participan de la selección masiva" /></td>
-                      <td className="p-4 min-w-[260px] max-w-[420px] align-top"><div className="flex items-center gap-2 min-w-0" title={detail}><span className="text-foreground font-bold block truncate leading-snug">{row.name}</span><span className="shrink-0 bg-violet-500/15 text-violet-700 px-2 py-0.5 rounded-full text-[10px] font-black uppercase">Promo</span></div></td>
+                      <td className="p-4 min-w-[260px] max-w-[420px] align-top"><div className="flex items-center gap-2 min-w-0" title={detail}><span className="text-foreground font-bold block truncate leading-snug">{row.name}</span><span className="shrink-0 bg-primary/15 text-primary px-2 py-0.5 rounded-full text-[10px] font-black uppercase">Promo</span></div></td>
                       <td className="p-3 text-center whitespace-nowrap"><div className="flex items-center justify-center gap-2"><button onClick={() => { setEditingPromotion(row); setPromotionModalOpen(true); }} className="text-primary hover:text-secondary transition-colors p-1" title="Editar promoción"><Edit2 size={18} /></button><button onClick={() => handleDeletePromotion(row)} className="text-foreground/60 hover:text-red-500 transition-colors p-1" title="Eliminar promoción"><Trash2 size={18} /></button></div></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
                       <td className="p-4 max-w-[140px]"><span className="text-foreground/40 font-medium text-sm">—</span></td>

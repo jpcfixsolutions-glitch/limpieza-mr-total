@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Lock, User } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../services/api.js";
-import logo from "../../img/logo-descartables.jpeg";
+import logo from "../../img/Logotipo Mister Total con Aro Azul.png";
 
 export function LoginView({ onLogin }) {
   const [username, setUsername] = useState("");
@@ -31,10 +31,10 @@ export function LoginView({ onLogin }) {
         <div className="flex flex-col items-center mb-8">
           <img
             src={logo}
-            alt="Descartables Yofre"
-            className="w-28 h-28 object-contain rounded-2xl mb-4 shadow-md"
+            alt="Mr.Total"
+            className="w-64 h-36 object-contain mb-2"
           />
-          <h1 className="text-foreground text-2xl font-black text-center">Descartables Yofre</h1>
+          <h1 className="text-foreground text-2xl font-black text-center">Mr.Total</h1>
           <p className="text-primary font-medium mt-2">Iniciar Sesión</p>
         </div>
 
