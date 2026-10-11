@@ -2,9 +2,11 @@ import { Router } from "express";
 import { ProductExtractionController } from "../controllers/productExtraction.controller.js";
 import { authenticate } from "../middleware/auth.middleware.js";
 import { requireRole } from "../middleware/role.middleware.js";
+import { requireBusinessUnit } from "../middleware/businessUnit.middleware.js";
 
 const router = Router();
-router.get("/summary", authenticate, ProductExtractionController.summary);
-router.get("/", authenticate, ProductExtractionController.list);
-router.post("/", authenticate, requireRole("admin"), ProductExtractionController.create);
+router.use(authenticate, requireBusinessUnit("LOCAL"));
+router.get("/summary", ProductExtractionController.summary);
+router.get("/", ProductExtractionController.list);
+router.post("/", requireRole("admin"), ProductExtractionController.create);
 export default router;

@@ -2,6 +2,7 @@ import { PriceGroupModel } from "../models/priceGroup.model.js";
 import { ProductModel } from "../models/product.model.js";
 import { ProductPriceTierModel } from "../models/productPriceTier.model.js";
 import { roundPriceUpToTen } from "../constants.js";
+import { ProductService } from "./product.service.js";
 
 const VALID_TYPES = ["proveedor", "coleccion"];
 
@@ -68,7 +69,7 @@ export const PriceGroupService = {
     return { message: `${labelFor(existing.type)} eliminada.` };
   },
 
-  async applyIncrease(id, { percent, updateCost = false }) {
+  async applyIncrease(id, { percent, updateCost = false }, businessUnit = null) {
     const existing = await PriceGroupModel.findById(id);
     if (!existing) throw { status: 404, message: "Grupo no encontrado." };
 
@@ -90,12 +91,14 @@ export const PriceGroupService = {
     }
 
     for (const product of products) {
-      const patch = { price: roundPriceUpToTen(product.price * factor) };
+      const contextual = businessUnit?.id ? await ProductModel.findByIdForUnit(product.id, businessUnit.id) : product;
+      const patch = { price: roundPriceUpToTen(Number(contextual.price) * factor) };
       if (product.packPrice != null) {
         patch.packPrice = roundPriceUpToTen(product.packPrice * factor);
       }
-      if (updateCost) patch.cost = roundMoney((product.cost || 0) * factor);
-      await ProductModel.update(product.id, patch);
+      if (updateCost) patch.cost = roundMoney((contextual.cost || 0) * factor);
+      if (businessUnit?.id) await ProductService.update(product.id, patch, businessUnit);
+      else await ProductModel.update(product.id, patch);
       const tiers = await ProductPriceTierModel.findByProductId(product.id);
       for (const tier of tiers) {
         await ProductPriceTierModel.update(tier.id, { price: roundPriceUpToTen(tier.price * factor) });

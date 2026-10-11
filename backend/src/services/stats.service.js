@@ -10,6 +10,8 @@ import {
   dailyExpenses,
   stockModifications,
   internalWithdrawals,
+  businessUnitProducts,
+  inventoryMovements,
 } from "../db/schema.js";
 import { calculateProfitability } from "./profitability.js";
 import { CashRegisterModel } from "../models/cashRegister.model.js";
@@ -20,9 +22,10 @@ import { ProductModel } from "../models/product.model.js";
 import { AccountMovementModel } from "../models/accountMovement.model.js";
 import { CustomerModel } from "../models/customer.model.js";
 import { getArgentinaTime } from "../db/timeUtils.js";
+import { adjustInventoryInTransaction } from "./inventory.service.js";
 
 export const StatsService = {
-  async getProfitability({ from, to, productId, categoryId } = {}) {
+  async getProfitability({ from, to, productId, categoryId } = {}, businessUnit = null) {
     const conditions = [];
     if (from) conditions.push(gte(transactions.createdAt, `${from} 00:00:00`));
     if (to) conditions.push(lte(transactions.createdAt, `${to} 23:59:59`));
@@ -32,6 +35,7 @@ export const StatsService = {
     // Sólo se contabilizan ventas confirmadas. Aún no hay flujo de devoluciones en
     // este sistema, por lo que no existen movimientos a descontar de este reporte.
     conditions.push(eq(transactions.status, "completed"));
+    if (businessUnit?.id) conditions.push(eq(transactions.businessUnitId, businessUnit.id));
     const query = db
       .select({
         productId: transactionItems.productId,
@@ -54,7 +58,12 @@ export const StatsService = {
     return calculateProfitability(items);
   },
 
-  async getRestockCost() {
+  async getRestockCost(businessUnit = null) {
+    if (businessUnit?.id) {
+      const rows = await db.select().from(businessUnitProducts)
+        .where(eq(businessUnitProducts.businessUnitId, businessUnit.id));
+      return { restockCost: rows.reduce((sum, p) => p.stock < p.minStock ? sum + (p.minStock - p.stock) * p.cost : sum, 0) };
+    }
     const allProducts = await ProductModel.findAll();
     const restockCost = allProducts.reduce((sum, p) => {
       if (p.stock < p.minStock) {
@@ -66,7 +75,23 @@ export const StatsService = {
     return { restockCost };
   },
 
-  async getActivityLog() {
+  async getActivityLog(businessUnit = null) {
+    if (businessUnit?.code === "WAREHOUSE") {
+      const rows = await db.select({
+        id: inventoryMovements.id, productName: products.name, movementType: inventoryMovements.movementType,
+        direction: inventoryMovements.direction, quantity: inventoryMovements.quantity,
+        stockBefore: inventoryMovements.stockBefore, stockAfter: inventoryMovements.stockAfter,
+        createdAt: inventoryMovements.createdAt,
+      }).from(inventoryMovements).innerJoin(products, eq(inventoryMovements.productId, products.id))
+        .where(eq(inventoryMovements.businessUnitId, businessUnit.id))
+        .orderBy(desc(inventoryMovements.createdAt)).limit(100);
+      return rows.map((row) => ({
+        id: `inventory-${row.id}`, type: row.movementType,
+        details: `${row.productName}: ${row.direction === "IN" ? "+" : "-"}${row.quantity} (${row.stockBefore} → ${row.stockAfter})`,
+        date: row.createdAt, icon: row.direction === "IN" ? "PackagePlus" : "PackageMinus",
+        color: row.direction === "IN" ? "text-green-600" : "text-orange-600", bg: "bg-surface",
+      }));
+    }
     const logs = [];
 
     // Aperturas y cierres de caja
@@ -107,11 +132,14 @@ export const StatsService = {
     }
 
     // Ventas (todas)
-    const recentTxs = await db
+    let recentTxQuery = db
       .select()
       .from(transactions)
       .orderBy(desc(transactions.createdAt))
       .limit(100);
+    const recentTxs = businessUnit?.id
+      ? await db.select().from(transactions).where(eq(transactions.businessUnitId, businessUnit.id)).orderBy(desc(transactions.createdAt)).limit(100)
+      : await recentTxQuery;
 
     for (const tx of recentTxs) {
       const items = await TransactionModel.findItemsByTransactionId(tx.id);
@@ -180,19 +208,20 @@ export const StatsService = {
     }
 
     // Movimientos de cuenta corriente
-    const accountMovementList = await AccountMovementModel.findAll();
+    const accountMovementList = await AccountMovementModel.findAll(businessUnit?.id);
     if (accountMovementList.length > 0) {
-      const customerList = await CustomerModel.findAll();
+      const customerList = await CustomerModel.findAll(businessUnit?.id);
       const customerById = new Map(customerList.map((c) => [c.id, c]));
 
       for (const movement of accountMovementList) {
         const customer = customerById.get(movement.customerId);
         const who = customer ? `${customer.name} ${customer.lastName}` : "Cliente";
         const isCharge = movement.type === "cargo";
+        const isReversal = movement.type === "reversion_cargo";
         logs.push({
           id: `account-${movement.id}`,
-          type: isCharge ? "Cargo a cuenta" : "Cobro de cuenta",
-          details: isCharge
+          type: isReversal ? "Reversión de cargo" : isCharge ? "Cargo a cuenta" : "Cobro de cuenta",
+          details: isReversal ? `${who} — reversión por $${Number(movement.amount).toFixed(2)}` : isCharge
             ? `${who} — $${Number(movement.amount).toFixed(2)} fiado`
             : `${who} — $${Number(movement.amount).toFixed(2)} en ${movement.methodName}`,
           date: movement.createdAt,
@@ -234,12 +263,12 @@ export const StatsService = {
     return created;
   },
 
-  async createInternalWithdrawal({ productId, quantity }) {
+  async createInternalWithdrawal({ productId, quantity }, businessUnit = null, userId = null) {
     if (!productId || !quantity || Number(quantity) <= 0) {
       throw { status: 400, message: "productId y quantity son requeridos." };
     }
 
-    const product = await ProductModel.findById(productId);
+    const product = businessUnit?.id ? await ProductModel.findByIdForUnit(Number(productId), businessUnit.id) : await ProductModel.findById(productId);
     if (!product) throw { status: 404, message: "Producto no encontrado." };
     if (product.stock < Number(quantity)) {
       throw { status: 400, message: "Stock insuficiente para el retiro." };
@@ -248,17 +277,18 @@ export const StatsService = {
     const oldStock = product.stock;
     const newStock = oldStock - Number(quantity);
 
-    await db
-      .update(products)
-      .set({ stock: newStock })
-      .where(sql`${products.id} = ${productId}`);
-
     const { datetime: wDatetime } = getArgentinaTime();
-    await db.insert(internalWithdrawals).values({
-      productId,
-      productName: product.name,
-      quantity: Number(quantity),
-      createdAt: wDatetime,
+    await db.transaction(async (tx) => {
+      const [withdrawal] = await tx.insert(internalWithdrawals).values({ productId, productName: product.name, quantity: Number(quantity), createdAt: wDatetime }).returning();
+      if (businessUnit?.id) {
+        await adjustInventoryInTransaction(tx, {
+          businessUnitId: businessUnit.id, productId: Number(productId), direction: "OUT", quantity: Number(quantity),
+          movementType: "INTERNAL_WITHDRAWAL", unitCost: product.cost, sourceType: "internal_withdrawal",
+          sourceId: withdrawal.id, idempotencyKey: `internal-withdrawal:${withdrawal.id}`, userId,
+        });
+      } else {
+        await tx.update(products).set({ stock: newStock }).where(sql`${products.id} = ${productId}`);
+      }
     });
 
     return { success: true };

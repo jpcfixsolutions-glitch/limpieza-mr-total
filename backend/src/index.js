@@ -20,6 +20,9 @@ import packTypeRoutes from "./routes/packType.routes.js";
 import customerRoutes from "./routes/customer.routes.js";
 import promotionRoutes from "./routes/promotion.routes.js";
 import productExtractionRoutes from "./routes/productExtraction.routes.js";
+import businessUnitRoutes from "./routes/businessUnit.routes.js";
+import inventoryRoutes from "./routes/inventory.routes.js";
+import warehouseRoutes from "./routes/warehouse.routes.js";
 
 await initializeDatabase();
 
@@ -58,7 +61,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Business-Unit", "Idempotency-Key"],
   optionsSuccessStatus: 204,
 };
 
@@ -85,6 +88,9 @@ app.use("/api/pack-types", packTypeRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/promotions", promotionRoutes);
 app.use("/api/product-extractions", productExtractionRoutes);
+app.use("/api/business-units", businessUnitRoutes);
+app.use("/api/inventory", inventoryRoutes);
+app.use("/api/warehouse", warehouseRoutes);
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 

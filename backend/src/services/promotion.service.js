@@ -39,12 +39,22 @@ function attachAvailability(promotions, componentRows) {
 }
 
 export const PromotionService = {
-  async getAll() {
+  async getAll(businessUnit = null) {
     const list = await PromotionModel.findAll();
-    return attachAvailability(list, await PromotionModel.findItemsByPromotionIds(list.map((p) => p.id)));
+    const definitions = await PromotionModel.findItemsByPromotionIds(list.map((p) => p.id));
+    if (!businessUnit?.id) return attachAvailability(list, definitions);
+    const contextual = new Map();
+    await Promise.all([...new Set(definitions.map((row) => row.productId))].map(async (id) => {
+      contextual.set(id, await ProductModel.findByIdForUnit(id, businessUnit.id));
+    }));
+    return attachAvailability(list, definitions.map((row) => {
+      const product = contextual.get(row.productId);
+      const direct = product?.fulfillmentMode === "WAREHOUSE_DIRECT";
+      return { ...row, stock: direct ? Number(product?.warehouseStock || 0) : Number(product?.stock || 0), cost: direct ? Number(product?.warehouseCost || 0) : Number(product?.cost || 0), isAvailable: Boolean(product?.isAvailable), fulfillmentMode: product?.fulfillmentMode || "OWN_STOCK" };
+    }));
   },
 
-  async create({ name, description, price, items }) {
+  async create({ name, description, price, items }, businessUnit = null) {
     const cleanName = String(name || "").trim();
     const cleanPrice = Number(price);
     if (!cleanName) throw { status: 400, message: "El nombre de la promoción es obligatorio." };
@@ -54,7 +64,7 @@ export const PromotionService = {
     const missing = products.findIndex((product) => !product);
     if (missing >= 0) throw { status: 400, message: "Uno de los productos seleccionados ya no existe." };
     const created = await PromotionModel.create({ name: cleanName, description: String(description || "").trim() || null, price: roundPriceUpToTen(cleanPrice) }, normalizedItems);
-    return (await this.getAll()).find((promotion) => promotion.id === created.id);
+    return (await this.getAll(businessUnit)).find((promotion) => promotion.id === created.id);
   },
 
   async remove(id) {
@@ -64,7 +74,7 @@ export const PromotionService = {
     return { message: "Promoción eliminada." };
   },
 
-  async update(id, { name, description, price, items }) {
+  async update(id, { name, description, price, items }, businessUnit = null) {
     const promotion = await PromotionModel.findById(Number(id));
     if (!promotion) throw { status: 404, message: "Promoción no encontrada." };
     const cleanName = String(name || "").trim();
@@ -75,6 +85,6 @@ export const PromotionService = {
     const products = await Promise.all(normalizedItems.map((item) => ProductModel.findById(item.productId)));
     if (products.some((product) => !product)) throw { status: 400, message: "Uno de los productos seleccionados ya no existe." };
     await PromotionModel.update(Number(id), { name: cleanName, description: String(description || "").trim() || null, price: roundPriceUpToTen(cleanPrice) }, normalizedItems);
-    return (await this.getAll()).find((item) => item.id === Number(id));
+    return (await this.getAll(businessUnit)).find((item) => item.id === Number(id));
   },
 };

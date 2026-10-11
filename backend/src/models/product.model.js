@@ -1,4 +1,4 @@
-import { eq, count, asc } from "drizzle-orm";
+import { and, eq, count, asc, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   products,
@@ -7,6 +7,7 @@ import {
   packTypes,
   productPriceTiers,
   stockModifications,
+  businessUnitProducts,
 } from "../db/schema.js";
 
 const SELECT_FIELDS = {
@@ -30,6 +31,29 @@ const SELECT_FIELDS = {
   isAvailable: products.isAvailable,
   createdAt: products.createdAt,
 };
+
+function contextualFields() {
+  return {
+    ...SELECT_FIELDS,
+    stock: sql`COALESCE(${businessUnitProducts.stock}, 0)`.mapWith(Number),
+    minStock: sql`COALESCE(${businessUnitProducts.minStock}, 0)`.mapWith(Number),
+    cost: sql`COALESCE(${businessUnitProducts.cost}, ${products.cost}, 0)`.mapWith(Number),
+    price: sql`COALESCE(${businessUnitProducts.salePrice}, ${products.price}, 0)`.mapWith(Number),
+    isAvailable: sql`COALESCE(${businessUnitProducts.isAvailable}, 0)`.mapWith(Boolean),
+    fulfillmentMode: sql`COALESCE(${businessUnitProducts.fulfillmentMode}, 'OWN_STOCK')`,
+    inventoryConfigured: sql`CASE WHEN ${businessUnitProducts.id} IS NULL THEN 0 ELSE 1 END`.mapWith(Boolean),
+    warehouseStock: sql`COALESCE((
+      SELECT wbp.stock FROM business_unit_products wbp
+      JOIN business_units wbu ON wbu.id = wbp.business_unit_id
+      WHERE wbp.product_id = ${products.id} AND wbu.code = 'WAREHOUSE'
+    ), 0)`.mapWith(Number),
+    warehouseCost: sql`COALESCE((
+      SELECT wbp.cost FROM business_unit_products wbp
+      JOIN business_units wbu ON wbu.id = wbp.business_unit_id
+      WHERE wbp.product_id = ${products.id} AND wbu.code = 'WAREHOUSE'
+    ), 0)`.mapWith(Number),
+  };
+}
 
 function withJoins(query) {
   return query
@@ -77,6 +101,32 @@ export const ProductModel = {
     return withJoins(db.select(SELECT_FIELDS).from(products))
       .where(eq(products.codbarra, codbarra))
       .then((r) => r[0]);
+  },
+
+  findAllForUnit(businessUnitId) {
+    return withJoins(db.select(contextualFields()).from(products)
+      .leftJoin(businessUnitProducts, and(
+        eq(businessUnitProducts.productId, products.id),
+        eq(businessUnitProducts.businessUnitId, businessUnitId)
+      ))).orderBy(asc(products.name));
+  },
+
+  findByIdForUnit(id, businessUnitId) {
+    return withJoins(db.select(contextualFields()).from(products)
+      .leftJoin(businessUnitProducts, and(
+        eq(businessUnitProducts.productId, products.id),
+        eq(businessUnitProducts.businessUnitId, businessUnitId)
+      )))
+      .where(eq(products.id, id)).then((rows) => rows[0]);
+  },
+
+  findByCodbarraForUnit(codbarra, businessUnitId) {
+    return withJoins(db.select(contextualFields()).from(products)
+      .leftJoin(businessUnitProducts, and(
+        eq(businessUnitProducts.productId, products.id),
+        eq(businessUnitProducts.businessUnitId, businessUnitId)
+      )))
+      .where(eq(products.codbarra, codbarra)).then((rows) => rows[0]);
   },
 
   findByPriceGroupId(priceGroupId) {

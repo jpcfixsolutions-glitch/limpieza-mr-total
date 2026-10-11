@@ -37,7 +37,7 @@ export const PriceGroupController = {
 
   async applyIncrease(req, res) {
     try {
-      res.json(await PriceGroupService.applyIncrease(req.params.id, req.body));
+      res.json(await PriceGroupService.applyIncrease(req.params.id, req.body, req.businessUnit));
     } catch (err) {
       sendControllerError(res, err);
     }

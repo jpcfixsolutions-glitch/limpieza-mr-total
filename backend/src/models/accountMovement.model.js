@@ -2,7 +2,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { accountMovements, customers } from "../db/schema.js";
 
-const chargesSum = sql`COALESCE(SUM(CASE WHEN ${accountMovements.type} = 'cargo' THEN ${accountMovements.amount} ELSE 0 END), 0)`;
+const chargesSum = sql`COALESCE(SUM(CASE WHEN ${accountMovements.type} = 'cargo' THEN ${accountMovements.amount} WHEN ${accountMovements.type} = 'reversion_cargo' THEN -${accountMovements.amount} ELSE 0 END), 0)`;
 const paymentsSum = sql`COALESCE(SUM(CASE WHEN ${accountMovements.type} = 'pago' THEN ${accountMovements.amount} ELSE 0 END), 0)`;
 
 export const AccountMovementModel = {
@@ -51,21 +51,23 @@ export const AccountMovementModel = {
       .orderBy(desc(accountMovements.createdAt));
   },
 
-  findAll() {
+  findAll(businessUnitId = null) {
     return db
       .select()
       .from(accountMovements)
+      .where(businessUnitId ? eq(accountMovements.businessUnitId, businessUnitId) : undefined)
       .orderBy(desc(accountMovements.createdAt))
       .limit(100);
   },
 
-  findRecentWithCustomers() {
+  findRecentWithCustomers(businessUnitId = null) {
     return db.select({
       id: accountMovements.id, customerId: accountMovements.customerId, type: accountMovements.type,
       amount: accountMovements.amount, methodName: accountMovements.methodName, detail: accountMovements.detail,
       transactionId: accountMovements.transactionId, createdAt: accountMovements.createdAt,
       customerName: customers.name, customerLastName: customers.lastName, document: customers.document,
     }).from(accountMovements).innerJoin(customers, eq(accountMovements.customerId, customers.id))
+      .where(businessUnitId ? eq(accountMovements.businessUnitId, businessUnitId) : undefined)
       .orderBy(desc(accountMovements.createdAt), desc(accountMovements.id)).limit(200);
   },
 };

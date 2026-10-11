@@ -1,7 +1,8 @@
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { products, productExtractionItems, productExtractions } from "../db/schema.js";
+import { businessUnitProducts, products, productExtractionItems, productExtractions } from "../db/schema.js";
 import { getArgentinaTime } from "../db/timeUtils.js";
+import { adjustInventoryInTransaction } from "./inventory.service.js";
 
 const REASONS = new Set(["uso_interno", "rotura_dano", "vencimiento", "donacion", "otro"]);
 
@@ -23,7 +24,7 @@ function parseItems(items) {
 }
 
 export const ProductExtractionService = {
-  async create({ items, reason, reasonDetail, observations }, user) {
+  async create({ items, reason, reasonDetail, observations }, user, businessUnit = null) {
     if (!REASONS.has(reason)) throw { status: 400, message: "El motivo de extracción no es válido." };
     if (reason === "otro" && !String(reasonDetail || "").trim()) {
       throw { status: 400, message: "Describí el motivo de la extracción." };
@@ -33,6 +34,30 @@ export const ProductExtractionService = {
     const { datetime } = getArgentinaTime();
 
     return db.transaction(async (tx) => {
+      if (businessUnit?.id) {
+        const rows = await tx.select({ product: products, inventory: businessUnitProducts }).from(products)
+          .innerJoin(businessUnitProducts, and(eq(businessUnitProducts.productId, products.id), eq(businessUnitProducts.businessUnitId, businessUnit.id)))
+          .where(inArray(products.id, ids));
+        const byId = new Map(rows.map((row) => [row.product.id, row]));
+        const detail = ids.map((productId) => {
+          const row = byId.get(productId); const quantity = quantities.get(productId);
+          if (!row || !row.inventory.isAvailable) throw { status: 400, message: `Producto no disponible (id ${productId}).` };
+          if (Number(row.inventory.stock) < quantity) throw { status: 400, message: `Stock insuficiente para "${row.product.name}". Disponible: ${row.inventory.stock}, solicitado: ${quantity}.` };
+          const unitCost = Number(row.inventory.cost || 0);
+          return { productId, productName: row.product.name, quantity, unitCost, subtotalCost: unitCost * quantity };
+        });
+        const totalCost = detail.reduce((sum, item) => sum + item.subtotalCost, 0);
+        const totalUnits = detail.reduce((sum, item) => sum + item.quantity, 0);
+        const [created] = await tx.insert(productExtractions).values({ userId: user.id, userName: user.name || "Usuario", reason, reasonDetail: String(reasonDetail || "").trim() || null, observations: String(observations || "").trim() || null, totalCost, totalUnits, createdAt: datetime }).returning();
+        const createdItems = await tx.insert(productExtractionItems).values(detail.map((item) => ({ ...item, extractionId: created.id }))).returning();
+        for (const item of createdItems) await adjustInventoryInTransaction(tx, {
+          businessUnitId: businessUnit.id, productId: item.productId, direction: "OUT", quantity: item.quantity,
+          movementType: "PRODUCT_EXTRACTION", unitCost: item.unitCost, sourceType: "product_extraction",
+          sourceId: created.id, sourceItemId: item.id, idempotencyKey: `extraction:${created.id}:${item.id}`, userId: user.id,
+          notes: observations,
+        });
+        return { ...created, items: createdItems };
+      }
       const productRows = await tx.select().from(products).where(inArray(products.id, ids));
       const byId = new Map(productRows.map((p) => [p.id, p]));
       const detail = ids.map((productId) => {

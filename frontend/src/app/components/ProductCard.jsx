@@ -67,7 +67,7 @@ export const ProductCard = memo(function ProductCard({ product, onAddToCart }) {
             )}
           </div>
           <p className="text-foreground/70 text-xs md:text-sm font-medium">
-            {product.category} · {formatStock(product.stock, product.unitsPerPack, packTypeLabel(product))}
+            {product.category} · {formatStock(product.stock, product.unitsPerPack, packTypeLabel(product))}{product.stockSource ? ` · ${product.stockSource}` : ""}
           </p>
         </div>
       </div>

@@ -4,7 +4,10 @@ import { sendControllerError } from "./controllerError.js";
 export const TransactionController = {
   async create(req, res) {
     try {
-      const result = await TransactionService.create(req.body, req.user.id);
+      const result = await TransactionService.create({
+        ...req.body,
+        idempotencyKey: req.headers["idempotency-key"] || req.body.idempotencyKey,
+      }, req.user.id, req.businessUnit);
       res.status(201).json(result);
     } catch (err) {
       sendControllerError(res, err);
@@ -14,7 +17,7 @@ export const TransactionController = {
   async getByRegisterId(req, res) {
     try {
       const { registerId } = req.params;
-      const result = await TransactionService.getByRegisterId(Number(registerId));
+      const result = await TransactionService.getByRegisterId(Number(registerId), req.businessUnit);
       res.json(result);
     } catch (err) {
       sendControllerError(res, err);

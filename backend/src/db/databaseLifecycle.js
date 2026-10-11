@@ -6,6 +6,161 @@ const MIGRATIONS_TABLE = "app_migrations";
 
 const migrations = [
   {
+    id: "20261011_012_business_units_and_warehouse",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS business_units (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        updated_at TEXT DEFAULT (datetime('now','localtime'))
+      )`,
+      `INSERT OR IGNORE INTO business_units (code, name, type, is_active)
+       VALUES ('LOCAL', 'Local', 'retail', 1), ('WAREHOUSE', 'Galpón', 'warehouse', 1)`,
+      `CREATE TABLE IF NOT EXISTS business_unit_products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        business_unit_id INTEGER NOT NULL REFERENCES business_units(id) ON DELETE RESTRICT,
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        stock INTEGER NOT NULL DEFAULT 0 CHECK(stock >= 0),
+        min_stock INTEGER NOT NULL DEFAULT 0 CHECK(min_stock >= 0),
+        cost REAL NOT NULL DEFAULT 0 CHECK(cost >= 0),
+        sale_price REAL NOT NULL DEFAULT 0 CHECK(sale_price >= 0),
+        is_available INTEGER NOT NULL DEFAULT 1,
+        fulfillment_mode TEXT NOT NULL DEFAULT 'OWN_STOCK',
+        updated_at TEXT DEFAULT (datetime('now','localtime')),
+        UNIQUE(business_unit_id, product_id),
+        CHECK(fulfillment_mode IN ('OWN_STOCK', 'WAREHOUSE_DIRECT'))
+      )`,
+      `INSERT OR IGNORE INTO business_unit_products
+         (business_unit_id, product_id, stock, min_stock, cost, sale_price, is_available, fulfillment_mode)
+       SELECT bu.id, p.id, p.stock, p.min_stock, p.cost, p.price, p.is_available, 'OWN_STOCK'
+       FROM products p CROSS JOIN business_units bu WHERE bu.code = 'LOCAL'`,
+      `CREATE TABLE IF NOT EXISTS inventory_movements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        business_unit_id INTEGER NOT NULL REFERENCES business_units(id) ON DELETE RESTRICT,
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+        movement_type TEXT NOT NULL,
+        direction TEXT NOT NULL CHECK(direction IN ('IN', 'OUT')),
+        quantity INTEGER NOT NULL CHECK(quantity > 0),
+        unit_cost REAL NOT NULL DEFAULT 0,
+        stock_before INTEGER NOT NULL,
+        stock_after INTEGER NOT NULL,
+        counterpart_business_unit_id INTEGER REFERENCES business_units(id) ON DELETE SET NULL,
+        source_type TEXT,
+        source_id TEXT,
+        source_item_id TEXT,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        reversal_of_movement_id INTEGER,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        notes TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+      )`,
+      "CREATE INDEX IF NOT EXISTS inventory_movements_unit_created_idx ON inventory_movements (business_unit_id, created_at)",
+      "CREATE INDEX IF NOT EXISTS inventory_movements_product_idx ON inventory_movements (product_id)",
+      "ALTER TABLE transactions ADD COLUMN business_unit_id INTEGER REFERENCES business_units(id) ON DELETE RESTRICT",
+      "ALTER TABLE transactions ADD COLUMN idempotency_key TEXT",
+      "UPDATE transactions SET business_unit_id = (SELECT id FROM business_units WHERE code = 'LOCAL') WHERE business_unit_id IS NULL",
+      "CREATE UNIQUE INDEX IF NOT EXISTS transactions_unit_idempotency_unique ON transactions (business_unit_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
+      "ALTER TABLE customers ADD COLUMN business_unit_id INTEGER REFERENCES business_units(id) ON DELETE RESTRICT",
+      "ALTER TABLE customers ADD COLUMN internal_code TEXT",
+      "ALTER TABLE customers ADD COLUMN is_internal INTEGER NOT NULL DEFAULT 0",
+      "UPDATE customers SET business_unit_id = (SELECT id FROM business_units WHERE code = 'LOCAL') WHERE business_unit_id IS NULL",
+      "DROP INDEX IF EXISTS customers_document_unique",
+      "CREATE UNIQUE INDEX IF NOT EXISTS customers_unit_document_unique ON customers (business_unit_id, document)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS customers_internal_code_unique ON customers (internal_code) WHERE internal_code IS NOT NULL",
+      `INSERT OR IGNORE INTO customers
+         (name, last_name, document, phone, is_active, business_unit_id, internal_code, is_internal)
+       SELECT 'Local', 'Mr.Total', 'INTERNAL-LOCAL', NULL, 1, id, 'LOCAL_INTERNAL', 1
+       FROM business_units WHERE code = 'WAREHOUSE'`,
+      "ALTER TABLE account_movements ADD COLUMN business_unit_id INTEGER REFERENCES business_units(id) ON DELETE RESTRICT",
+      `UPDATE account_movements
+       SET business_unit_id = COALESCE(
+         (SELECT business_unit_id FROM customers WHERE customers.id = account_movements.customer_id),
+         (SELECT id FROM business_units WHERE code = 'LOCAL')
+       ) WHERE business_unit_id IS NULL`,
+      `CREATE TABLE IF NOT EXISTS warehouse_orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        business_unit_id INTEGER NOT NULL REFERENCES business_units(id) ON DELETE RESTRICT,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE RESTRICT,
+        status TEXT NOT NULL DEFAULT 'draft',
+        total REAL NOT NULL DEFAULT 0,
+        observations TEXT,
+        charge_to_account INTEGER NOT NULL DEFAULT 0,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        idempotency_key TEXT,
+        confirmed_at TEXT,
+        dispatched_at TEXT,
+        cancelled_at TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        updated_at TEXT DEFAULT (datetime('now','localtime')),
+        CHECK(status IN ('draft','confirmed','preparing','dispatched','cancelled'))
+      )`,
+      "CREATE UNIQUE INDEX IF NOT EXISTS warehouse_orders_unit_idempotency_unique ON warehouse_orders (business_unit_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
+      `CREATE TABLE IF NOT EXISTS warehouse_order_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL REFERENCES warehouse_orders(id) ON DELETE CASCADE,
+        product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+        product_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL CHECK(quantity > 0),
+        unit_price REAL NOT NULL,
+        unit_cost REAL NOT NULL,
+        total REAL NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS warehouse_purchases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        business_unit_id INTEGER NOT NULL REFERENCES business_units(id) ON DELETE RESTRICT,
+        supplier TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        total REAL NOT NULL DEFAULT 0,
+        observations TEXT,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        idempotency_key TEXT,
+        received_at TEXT,
+        cancelled_at TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        updated_at TEXT DEFAULT (datetime('now','localtime')),
+        CHECK(status IN ('draft','received','cancelled'))
+      )`,
+      "CREATE UNIQUE INDEX IF NOT EXISTS warehouse_purchases_unit_idempotency_unique ON warehouse_purchases (business_unit_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
+      `CREATE TABLE IF NOT EXISTS warehouse_purchase_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        purchase_id INTEGER NOT NULL REFERENCES warehouse_purchases(id) ON DELETE CASCADE,
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+        product_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL CHECK(quantity > 0),
+        unit_cost REAL NOT NULL,
+        total REAL NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS inventory_transfers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_business_unit_id INTEGER NOT NULL REFERENCES business_units(id) ON DELETE RESTRICT,
+        to_business_unit_id INTEGER NOT NULL REFERENCES business_units(id) ON DELETE RESTRICT,
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+        quantity INTEGER NOT NULL CHECK(quantity > 0),
+        unit_cost REAL NOT NULL DEFAULT 0,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        notes TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        CHECK(from_business_unit_id <> to_business_unit_id)
+      )`,
+      `INSERT OR IGNORE INTO app_settings (key, value)
+       VALUES ('warehouse_internal_sale_mode', 'inventory_only'),
+              ('warehouse_transfer_price_mode', 'cost')`,
+    ],
+  },
+  {
+    id: "20261011_013_account_movement_reversals",
+    statements: [
+      "ALTER TABLE account_movements ADD COLUMN source_type TEXT",
+      "ALTER TABLE account_movements ADD COLUMN source_id TEXT",
+      "ALTER TABLE account_movements ADD COLUMN reversal_of_movement_id INTEGER",
+      "CREATE UNIQUE INDEX IF NOT EXISTS account_movements_source_unique ON account_movements (business_unit_id, source_type, source_id, type) WHERE source_type IS NOT NULL AND source_id IS NOT NULL",
+    ],
+  },
+  {
     id: "20261011_011_transaction_discount_metadata",
     statements: [
       "ALTER TABLE transactions ADD COLUMN discount_percent REAL NOT NULL DEFAULT 0",

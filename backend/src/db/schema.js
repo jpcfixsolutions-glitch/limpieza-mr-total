@@ -18,6 +18,18 @@ export const users = sqliteTable("users", {
   createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
 });
 
+// ─── Unidades de negocio ────────────────────────────────────────────────────
+
+export const businessUnits = sqliteTable("business_units", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  code: text("code", { enum: ["LOCAL", "WAREHOUSE"] }).notNull().unique(),
+  name: text("name").notNull(),
+  type: text("type", { enum: ["retail", "warehouse"] }).notNull(),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
+  updatedAt: text("updated_at").default(sql`(datetime('now','localtime'))`),
+});
+
 // ─── Categorías ──────────────────────────────────────────────────────────────
 
 export const categories = sqliteTable("categories", {
@@ -70,6 +82,44 @@ export const products = sqliteTable("products", {
   minStock: integer("min_stock").notNull().default(5),
   icon: text("icon").notNull().default("Package"),
   isAvailable: integer("is_available", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
+});
+
+// El catálogo de productos es compartido. Todo dato operativo que puede variar
+// entre Local y Galpón vive en esta tabla.
+export const businessUnitProducts = sqliteTable("business_unit_products", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessUnitId: integer("business_unit_id").notNull().references(() => businessUnits.id, { onDelete: "restrict" }),
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  stock: integer("stock").notNull().default(0),
+  minStock: integer("min_stock").notNull().default(0),
+  cost: real("cost").notNull().default(0),
+  salePrice: real("sale_price").notNull().default(0),
+  isAvailable: integer("is_available", { mode: "boolean" }).notNull().default(true),
+  fulfillmentMode: text("fulfillment_mode", { enum: ["OWN_STOCK", "WAREHOUSE_DIRECT"] }).notNull().default("OWN_STOCK"),
+  updatedAt: text("updated_at").default(sql`(datetime('now','localtime'))`),
+}, (table) => [
+  uniqueIndex("business_unit_products_unit_product_unique").on(table.businessUnitId, table.productId),
+]);
+
+export const inventoryMovements = sqliteTable("inventory_movements", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessUnitId: integer("business_unit_id").notNull().references(() => businessUnits.id, { onDelete: "restrict" }),
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+  movementType: text("movement_type").notNull(),
+  direction: text("direction", { enum: ["IN", "OUT"] }).notNull(),
+  quantity: integer("quantity").notNull(),
+  unitCost: real("unit_cost").notNull().default(0),
+  stockBefore: integer("stock_before").notNull(),
+  stockAfter: integer("stock_after").notNull(),
+  counterpartBusinessUnitId: integer("counterpart_business_unit_id").references(() => businessUnits.id, { onDelete: "set null" }),
+  sourceType: text("source_type"),
+  sourceId: text("source_id"),
+  sourceItemId: text("source_item_id"),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  reversalOfMovementId: integer("reversal_of_movement_id"),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  notes: text("notes"),
   createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
 });
 
@@ -130,7 +180,11 @@ export const transactions = sqliteTable("transactions", {
   date: text("date").notNull(), // "DD/MM/YYYY"
   time: text("time").notNull(), // "HH:MM"
   createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
-});
+  businessUnitId: integer("business_unit_id").references(() => businessUnits.id, { onDelete: "restrict" }),
+  idempotencyKey: text("idempotency_key"),
+}, (table) => [
+  uniqueIndex("transactions_unit_idempotency_unique").on(table.businessUnitId, table.idempotencyKey),
+]);
 
 // ─── Pagos de una transacción ─────────────────────────────────────────────────
 
@@ -262,11 +316,17 @@ export const customers = sqliteTable("customers", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
   lastName: text("last_name").notNull(),
-  document: text("document").notNull().unique(),
+  document: text("document").notNull(),
   phone: text("phone"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
-});
+  businessUnitId: integer("business_unit_id").references(() => businessUnits.id, { onDelete: "restrict" }),
+  internalCode: text("internal_code"),
+  isInternal: integer("is_internal", { mode: "boolean" }).notNull().default(false),
+}, (table) => [
+  uniqueIndex("customers_unit_document_unique").on(table.businessUnitId, table.document),
+  uniqueIndex("customers_internal_code_unique").on(table.internalCode),
+]);
 
 // ─── Movimientos de cuenta corriente ──────────────────────────────────────────
 
@@ -275,7 +335,7 @@ export const accountMovements = sqliteTable("account_movements", {
   customerId: integer("customer_id")
     .notNull()
     .references(() => customers.id, { onDelete: "cascade" }),
-  type: text("type", { enum: ["cargo", "pago"] }).notNull(),
+  type: text("type", { enum: ["cargo", "pago", "reversion_cargo"] }).notNull(),
   amount: real("amount").notNull(), // siempre positivo
   transactionId: integer("transaction_id").references(() => transactions.id, {
     onDelete: "set null",
@@ -286,6 +346,82 @@ export const accountMovements = sqliteTable("account_movements", {
     onDelete: "set null",
   }),
   userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
+  businessUnitId: integer("business_unit_id").references(() => businessUnits.id, { onDelete: "restrict" }),
+  sourceType: text("source_type"),
+  sourceId: text("source_id"),
+  reversalOfMovementId: integer("reversal_of_movement_id"),
+});
+
+// ─── Operación mayorista del Galpón ─────────────────────────────────────────
+
+export const warehouseOrders = sqliteTable("warehouse_orders", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessUnitId: integer("business_unit_id").notNull().references(() => businessUnits.id, { onDelete: "restrict" }),
+  customerId: integer("customer_id").references(() => customers.id, { onDelete: "restrict" }),
+  status: text("status", { enum: ["draft", "confirmed", "preparing", "dispatched", "cancelled"] }).notNull().default("draft"),
+  total: real("total").notNull().default(0),
+  observations: text("observations"),
+  chargeToAccount: integer("charge_to_account", { mode: "boolean" }).notNull().default(false),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
+  confirmedAt: text("confirmed_at"),
+  dispatchedAt: text("dispatched_at"),
+  cancelledAt: text("cancelled_at"),
+  createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
+  updatedAt: text("updated_at").default(sql`(datetime('now','localtime'))`),
+}, (table) => [
+  uniqueIndex("warehouse_orders_unit_idempotency_unique").on(table.businessUnitId, table.idempotencyKey),
+]);
+
+export const warehouseOrderItems = sqliteTable("warehouse_order_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  orderId: integer("order_id").notNull().references(() => warehouseOrders.id, { onDelete: "cascade" }),
+  productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+  productName: text("product_name").notNull(),
+  quantity: integer("quantity").notNull(),
+  unitPrice: real("unit_price").notNull(),
+  unitCost: real("unit_cost").notNull(),
+  total: real("total").notNull(),
+});
+
+export const warehousePurchases = sqliteTable("warehouse_purchases", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessUnitId: integer("business_unit_id").notNull().references(() => businessUnits.id, { onDelete: "restrict" }),
+  supplier: text("supplier").notNull(),
+  status: text("status", { enum: ["draft", "received", "cancelled"] }).notNull().default("draft"),
+  total: real("total").notNull().default(0),
+  observations: text("observations"),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
+  receivedAt: text("received_at"),
+  cancelledAt: text("cancelled_at"),
+  createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
+  updatedAt: text("updated_at").default(sql`(datetime('now','localtime'))`),
+}, (table) => [
+  uniqueIndex("warehouse_purchases_unit_idempotency_unique").on(table.businessUnitId, table.idempotencyKey),
+]);
+
+export const warehousePurchaseItems = sqliteTable("warehouse_purchase_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  purchaseId: integer("purchase_id").notNull().references(() => warehousePurchases.id, { onDelete: "cascade" }),
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+  productName: text("product_name").notNull(),
+  quantity: integer("quantity").notNull(),
+  unitCost: real("unit_cost").notNull(),
+  total: real("total").notNull(),
+});
+
+export const inventoryTransfers = sqliteTable("inventory_transfers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fromBusinessUnitId: integer("from_business_unit_id").notNull().references(() => businessUnits.id, { onDelete: "restrict" }),
+  toBusinessUnitId: integer("to_business_unit_id").notNull().references(() => businessUnits.id, { onDelete: "restrict" }),
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+  quantity: integer("quantity").notNull(),
+  unitCost: real("unit_cost").notNull().default(0),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  notes: text("notes"),
   createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
 });
 

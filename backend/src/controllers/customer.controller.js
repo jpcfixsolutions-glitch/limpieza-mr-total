@@ -4,7 +4,7 @@ import { sendControllerError } from "./controllerError.js";
 export const CustomerController = {
   async list(req, res) {
     try {
-      res.json(await CustomerService.list({ search: req.query.search }));
+      res.json(await CustomerService.list({ search: req.query.search }, req.businessUnit));
     } catch (err) {
       sendControllerError(res, err);
     }
@@ -12,7 +12,7 @@ export const CustomerController = {
 
   async getByDocument(req, res) {
     try {
-      res.json(await CustomerService.getByDocument(req.params.document));
+      res.json(await CustomerService.getByDocument(req.params.document, req.businessUnit));
     } catch (err) {
       sendControllerError(res, err);
     }
@@ -20,7 +20,7 @@ export const CustomerController = {
 
   async create(req, res) {
     try {
-      res.status(201).json(await CustomerService.create(req.body));
+      res.status(201).json(await CustomerService.create(req.body, req.businessUnit));
     } catch (err) {
       sendControllerError(res, err);
     }
@@ -28,7 +28,7 @@ export const CustomerController = {
 
   async getDetail(req, res) {
     try {
-      res.json(await CustomerService.getDetail(req.params.id));
+      res.json(await CustomerService.getDetail(req.params.id, req.businessUnit));
     } catch (err) {
       sendControllerError(res, err);
     }
@@ -39,7 +39,8 @@ export const CustomerController = {
       const result = await CustomerService.registerPayment(
         req.params.id,
         req.body,
-        req.user.id
+        req.user.id,
+        req.businessUnit
       );
       res.status(201).json(result);
     } catch (err) {
@@ -55,6 +56,6 @@ export const CustomerController = {
     }
   },
   async listMovements(req, res) {
-    try { res.json(await CustomerService.listMovements()); } catch (err) { sendControllerError(res, err); }
+    try { res.json(await CustomerService.listMovements(req.businessUnit)); } catch (err) { sendControllerError(res, err); }
   },
 };

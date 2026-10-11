@@ -14,6 +14,8 @@ import { CreadorView } from "./components/CreadorView.jsx";
 import { Loader } from "./components/Loader.jsx";
 import { SubscriptionProvider } from "./modules/subscription/SubscriptionContext.jsx";
 import { SubscriptionOverlay } from "./modules/subscription/SubscriptionOverlay.jsx";
+import { BusinessUnitSelection } from "./components/BusinessUnitSelection.jsx";
+import { WarehouseHomeView, WarehouseOrdersView, WarehouseStockView, WarehousePurchasesView, WarehouseCustomersView, WarehouseMovementsView, WarehouseStatsView } from "./components/WarehouseViews.jsx";
 import api from "../services/api.js";
 
 const toastOptions = {
@@ -31,6 +33,13 @@ export default function App() {
     const stored = localStorage.getItem("user");
     return stored ? JSON.parse(stored) : null;
   });
+  const [businessUnit, setBusinessUnit] = useState(() => {
+    const storedUser = localStorage.getItem("user");
+    if (!storedUser) return null;
+    const parsed = JSON.parse(storedUser);
+    if (parsed.role === "admin") return localStorage.getItem("businessUnit") || null;
+    return "LOCAL";
+  });
 
   // Estado de caja (sincronizado con el backend)
   const [cajaStatus, setCajaStatus] = useState({ isOpen: false, register: null });
@@ -41,10 +50,13 @@ export default function App() {
 
   useEffect(() => {
     document.title = "Mr.Total";
-    if (user) {
+    if (user && businessUnit === "LOCAL") {
       fetchCajaStatus(true);
+    } else if (businessUnit === "WAREHOUSE") {
+      setCajaStatus({ isOpen: false, register: null });
+      setTransactions([]);
     }
-  }, [user]);
+  }, [user, businessUnit]);
 
   async function fetchCajaStatus(showLoader = false) {
     if (showLoader) setAppLoading(true);
@@ -110,6 +122,7 @@ export default function App() {
       discountAmount: transaction.discountAmount ?? 0,
       payments: transaction.payments,
       items: transaction.items,
+      idempotencyKey: transaction.idempotencyKey || crypto.randomUUID(),
     };
     const { data } = await api.post("/transactions", payload);
     const normalized = {
@@ -128,16 +141,31 @@ export default function App() {
     if (loggedUser.role === "creador") {
       setActiveView("creador");
     } else if (loggedUser.role === "admin") {
+      localStorage.removeItem("businessUnit");
+      setBusinessUnit(null);
       setActiveView("inicio");
     } else {
+      localStorage.setItem("businessUnit", "LOCAL");
+      setBusinessUnit("LOCAL");
       setActiveView("ventas");
     }
+  }
+
+  function handleBusinessUnitChange(code) {
+    if (user.role !== "admin" && code !== "LOCAL") return;
+    localStorage.setItem("businessUnit", code);
+    setBusinessUnit(code);
+    setTransactions([]);
+    setCajaStatus({ isOpen: false, register: null });
+    setActiveView(code === "WAREHOUSE" ? "warehouse-home" : "inicio");
   }
 
   function handleLogout() {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
+    localStorage.removeItem("businessUnit");
     setUser(null);
+    setBusinessUnit(null);
     setActiveView("ventas");
     setCajaStatus({ isOpen: false, register: null });
     setTransactions([]);
@@ -152,20 +180,34 @@ export default function App() {
     );
   }
 
+  if (user.role === "admin" && !businessUnit) {
+    return <BusinessUnitSelection user={user} onSelect={handleBusinessUnitChange} onLogout={handleLogout} />;
+  }
+
   return (
     <SubscriptionProvider>
-      <div className="size-full flex bg-background text-foreground relative overflow-x-hidden min-h-screen">
+      <div key={businessUnit} className="size-full flex bg-background text-foreground relative overflow-x-hidden min-h-screen">
         {appLoading && <Loader fullScreen />}
         <Sidebar
           activeView={activeView}
           onViewChange={setActiveView}
           role={user.role}
           onLogout={handleLogout}
+          businessUnit={businessUnit}
+          onBusinessUnitChange={handleBusinessUnitChange}
         />
 
-        {activeView === "creador" && user.role === "creador" && <CreadorView />}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-home" && <WarehouseHomeView />}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-orders" && <WarehouseOrdersView />}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-stock" && <WarehouseStockView />}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-purchases" && <WarehousePurchasesView />}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-customers" && <WarehouseCustomersView />}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-movements" && <WarehouseMovementsView />}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-stats" && <WarehouseStatsView />}
 
-        {activeView === "inicio" && user.role === "admin" && (
+        {businessUnit === "LOCAL" && activeView === "creador" && user.role === "creador" && <CreadorView />}
+
+        {businessUnit === "LOCAL" && activeView === "inicio" && user.role === "admin" && (
           <InicioView
             isCajaOpen={cajaStatus.isOpen}
             onOpenCaja={handleOpenCaja}
@@ -174,7 +216,7 @@ export default function App() {
             suggestedInitialCash={cajaStatus.suggestedInitialCash || 0}
           />
         )}
-        {activeView === "ventas" && user.role !== "creador" && (
+        {businessUnit === "LOCAL" && activeView === "ventas" && user.role !== "creador" && (
           <VentasView
             isCajaOpen={cajaStatus.isOpen}
             onAddTransaction={handleAddTransaction}
@@ -184,8 +226,8 @@ export default function App() {
             suggestedInitialCash={cajaStatus.suggestedInitialCash || 0}
           />
         )}
-        {activeView === "inventario" && user.role === "admin" && <InventarioView />}
-        {activeView === "caja" && user.role !== "creador" && (
+        {businessUnit === "LOCAL" && activeView === "inventario" && user.role === "admin" && <InventarioView />}
+        {businessUnit === "LOCAL" && activeView === "caja" && user.role !== "creador" && (
           <CajaView
             role={user.role}
             isCajaOpen={cajaStatus.isOpen}
@@ -197,10 +239,10 @@ export default function App() {
             suggestedInitialCash={cajaStatus.suggestedInitialCash || 0}
           />
         )}
-        {activeView === "cuentas" && user.role !== "creador" && <CuentasCorrientesView />}
-        {activeView === "estadisticas" && user.role === "admin" && <EstadisticasView />}
-        {activeView === "usuarios" && user.role === "admin" && <UsuariosView />}
-        {activeView === "configuracion" && user.role === "admin" && <ConfiguracionView />}
+        {businessUnit === "LOCAL" && activeView === "cuentas" && user.role !== "creador" && <CuentasCorrientesView />}
+        {businessUnit === "LOCAL" && activeView === "estadisticas" && user.role === "admin" && <EstadisticasView />}
+        {businessUnit === "LOCAL" && activeView === "usuarios" && user.role === "admin" && <UsuariosView />}
+        {businessUnit === "LOCAL" && activeView === "configuracion" && user.role === "admin" && <ConfiguracionView />}
 
         <SubscriptionOverlay userRole={user.role} onLogout={handleLogout} />
         <Toaster position="bottom-left" toastOptions={toastOptions} />

@@ -15,6 +15,8 @@ api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token");
   // Faltaban las comillas invertidas (backticks) en tu código original para que funcione la interpolación
   if (token) config.headers.Authorization = `Bearer ${token}`; 
+  const businessUnit = localStorage.getItem("businessUnit") || "LOCAL";
+  config.headers["X-Business-Unit"] = businessUnit;
   return config;
 });
 
@@ -26,6 +28,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !isLoginRequest) {
       localStorage.removeItem("token");
       localStorage.removeItem("user");
+      localStorage.removeItem("businessUnit");
       window.location.reload();
     }
     return Promise.reject(error);

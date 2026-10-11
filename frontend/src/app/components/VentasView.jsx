@@ -31,10 +31,11 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [page, setPage] = useState(1);
   const cartRef = useRef(cartItems);
+  const saleRequestKeyRef = useRef(null);
   cartRef.current = cartItems;
 
   const fetchProducts = useCallback(() => {
-    return Promise.all([api.get("/products"), api.get("/promotions")]).then(([pRes, promoRes]) => { setProducts(pRes.data); setPromotions(promoRes.data); }).catch(() => {});
+    return Promise.all([api.get("/products"), api.get("/promotions")]).then(([pRes, promoRes]) => { setProducts(pRes.data.map((p) => p.fulfillmentMode === "WAREHOUSE_DIRECT" ? { ...p, localStock: p.stock, stock: p.warehouseStock, stockSource: "Galpón" } : p)); setPromotions(promoRes.data); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -45,7 +46,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
       api.get("/categories"),
       api.get("/promotions"),
     ]).then(([pRes, mRes, cRes, promoRes]) => {
-      setProducts(pRes.data);
+      setProducts(pRes.data.map((p) => p.fulfillmentMode === "WAREHOUSE_DIRECT" ? { ...p, localStock: p.stock, stock: p.warehouseStock, stockSource: "Galpón" } : p));
       setPaymentMethods(mRes.data);
       setCategories(
         cRes.data
@@ -226,6 +227,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
       .filter((p) => p.type === ACCOUNT_METHOD_NAME)
       .reduce((sum, p) => sum + p.finalAmount, 0);
     const transaction = {
+      idempotencyKey: saleRequestKeyRef.current || (saleRequestKeyRef.current = crypto.randomUUID()),
       total: finalTotal,
       customerId: meta.customerId ?? null,
       discountPercent: meta.discountPercent ?? 0,
@@ -256,6 +258,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
           : `Total cobrado: $${finalTotal.toFixed(2)}`,
       });
       setCartItems([]);
+      saleRequestKeyRef.current = null;
       setShowPaymentModal(false);
       fetchProducts();
     } catch (err) {

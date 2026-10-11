@@ -11,7 +11,7 @@ import { PRODUCT_ICON_OPTIONS } from "../../utils/productIcons.js";
 import { PromotionModal } from "./PromotionModal.jsx";
 import { ProductExtractionModal } from "./ProductExtractionModal.jsx";
 
-const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", cost: "", categoryId: null, priceGroupId: null, stock: "", minStock: "", icon: "Package", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [] };
+const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", cost: "", categoryId: null, priceGroupId: null, stock: "", minStock: "", icon: "Package", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
 const PRODUCT_DRAFT_STORAGE_KEY = "descartables-yofre:product-draft";
 
 function loadProductDraft() {
@@ -333,6 +333,7 @@ export function InventarioView() {
         priceTiers: (productModal.item.priceTiers || [])
           .map((t) => ({ quantity: parseInt(t.quantity, 10), price: parseFloat(t.price) }))
           .filter((t) => t.quantity >= 2 && Number.isFinite(t.price) && t.price >= 0),
+        fulfillmentMode: productModal.item.fulfillmentMode === "WAREHOUSE_DIRECT" ? "WAREHOUSE_DIRECT" : "OWN_STOCK",
       };
 
       let savedProduct;
@@ -615,6 +616,7 @@ export function InventarioView() {
                       <span className="text-foreground font-bold block whitespace-normal break-words leading-snug" title={product.name}>
                         {product.name}
                       </span>
+                      {product.fulfillmentMode === "WAREHOUSE_DIRECT" && <span className="inline-block mt-1 text-[10px] font-black uppercase bg-primary/15 text-primary px-2 py-0.5 rounded-full">Directo desde Galpón · disponible {product.warehouseStock || 0}</span>}
                     </td>
                     <td className="p-3 text-center whitespace-nowrap">
                       <div className="flex items-center justify-center gap-2">
@@ -832,6 +834,14 @@ export function InventarioView() {
                 <p className="col-span-2 text-foreground/60 font-medium text-xs">
                   Los precios de venta se redondean hacia arriba a la próxima decena y se guardan sin centavos. El costo conserva el valor exacto ingresado.
                 </p>
+              </div>
+              <div>
+                <label className="text-foreground/80 font-bold text-sm block mb-2">Abastecimiento de la venta local</label>
+                <select value={productModal.item.fulfillmentMode || "OWN_STOCK"} onChange={(e) => setProductModal((prev) => ({ ...prev, item: { ...prev.item, fulfillmentMode: e.target.value } }))} className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary outline-none">
+                  <option value="OWN_STOCK">Descontar del stock del Local</option>
+                  <option value="WAREHOUSE_DIRECT">Abastecer directamente desde Galpón</option>
+                </select>
+                {productModal.item.fulfillmentMode === "WAREHOUSE_DIRECT" && <p className="text-xs text-foreground/60 mt-2">La venta no descontará stock Local; validará y descontará únicamente el Galpón.</p>}
               </div>
               <div className="rounded-xl border border-foreground/15 bg-background/60 p-4 space-y-4">
                 <div>

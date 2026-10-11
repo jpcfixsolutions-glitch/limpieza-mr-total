@@ -7,7 +7,7 @@ import { getArgentinaTime } from "../db/timeUtils.js";
 import { isAccountMethod, round2 } from "../constants.js";
 import { db } from "../db/client.js";
 import { accountMovements, customers } from "../db/schema.js";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 function debtFrom({ charges = 0, payments = 0 }) {
   return Math.max(0, round2(charges - payments));
@@ -27,16 +27,16 @@ function parseDetail(raw) {
   }
 }
 
-async function requireCustomer(id) {
-  const customer = await CustomerModel.findById(Number(id));
+async function requireCustomer(id, businessUnit = null) {
+  const customer = await CustomerModel.findById(Number(id), businessUnit?.id);
   if (!customer) throw { status: 404, message: "Cliente no encontrado." };
   return customer;
 }
 
 export const CustomerService = {
-  async list({ search } = {}) {
+  async list({ search } = {}, businessUnit = null) {
     const [customers, balances] = await Promise.all([
-      CustomerModel.findAll(),
+      CustomerModel.findAll(businessUnit?.id),
       AccountMovementModel.balances(),
     ]);
 
@@ -55,18 +55,18 @@ export const CustomerService = {
       .sort((a, b) => b.debt - a.debt);
   },
 
-  async getByDocument(document) {
+  async getByDocument(document, businessUnit = null) {
     const value = normalizeDocument(document);
     if (!value) throw { status: 400, message: "El documento es requerido." };
 
-    const customer = await CustomerModel.findByDocument(value);
+    const customer = await CustomerModel.findByDocument(value, businessUnit?.id);
     if (!customer) throw { status: 404, message: "No existe un cliente con ese documento." };
 
     const balance = await AccountMovementModel.balanceByCustomerId(customer.id);
     return { ...customer, debt: debtFrom(balance) };
   },
 
-  async create({ name, lastName, document, phone, initialDebt }) {
+  async create({ name, lastName, document, phone, initialDebt }, businessUnit = null) {
     if (!name?.trim()) throw { status: 400, message: "El nombre es requerido." };
 
     const documentValue = normalizeDocument(document);
@@ -78,10 +78,12 @@ export const CustomerService = {
     const { datetime } = getArgentinaTime();
     try {
       return await db.transaction(async (tx) => {
-        const existing = await tx.select().from(customers).where(eq(customers.document, documentValue)).then((rows) => rows[0]);
+        const existing = await tx.select().from(customers).where(businessUnit?.id
+          ? and(eq(customers.document, documentValue), eq(customers.businessUnitId, businessUnit.id))
+          : eq(customers.document, documentValue)).then((rows) => rows[0]);
         if (existing) throw { status: 409, message: "Ya existe un cliente con ese documento." };
-        const [created] = await tx.insert(customers).values({ name: name.trim(), lastName: lastName?.trim() || "", document: documentValue, phone: phone?.trim() || null, isActive: true, createdAt: datetime }).returning();
-        if (debt > 0) await tx.insert(accountMovements).values({ customerId: created.id, type: "cargo", amount: debt, transactionId: null, methodName: null, detail: JSON.stringify([{ name: "Deuda inicial", quantity: 1, total: debt }]), registerId: null, userId: null, createdAt: datetime });
+        const [created] = await tx.insert(customers).values({ name: name.trim(), lastName: lastName?.trim() || "", document: documentValue, phone: phone?.trim() || null, isActive: true, businessUnitId: businessUnit?.id || null, createdAt: datetime }).returning();
+        if (debt > 0) await tx.insert(accountMovements).values({ customerId: created.id, type: "cargo", amount: debt, transactionId: null, methodName: null, detail: JSON.stringify([{ name: "Deuda inicial", quantity: 1, total: debt }]), registerId: null, userId: null, businessUnitId: businessUnit?.id || null, createdAt: datetime });
         return { ...created, debt };
       });
     } catch (error) {
@@ -90,8 +92,8 @@ export const CustomerService = {
     }
   },
 
-  async getDetail(id) {
-    const customer = await requireCustomer(id);
+  async getDetail(id, businessUnit = null) {
+    const customer = await requireCustomer(id, businessUnit);
     const [balance, movements] = await Promise.all([
       AccountMovementModel.balanceByCustomerId(customer.id),
       AccountMovementModel.findByCustomerId(customer.id),
@@ -118,6 +120,7 @@ export const CustomerService = {
         transactionId: movement.transactionId,
         createdAt: movement.createdAt,
         items: movement.type === "cargo" ? items : [],
+        isReversal: movement.type === "reversion_cargo",
       });
     }
 
@@ -131,11 +134,11 @@ export const CustomerService = {
   },
 
   // Cargo generado por una venta: solo la porción fiada, no el total de la venta.
-  async chargeSale({ customerId, amount, transactionId, items, registerId, userId }) {
+  async chargeSale({ customerId, amount, transactionId, items, registerId, userId }, businessUnit = null) {
     const value = round2(amount);
     if (value <= 0) throw { status: 400, message: "El monto a cuenta debe ser mayor a cero." };
 
-    const customer = await requireCustomer(customerId);
+    const customer = await requireCustomer(customerId, businessUnit);
     const { datetime } = getArgentinaTime();
 
     return AccountMovementModel.create({
@@ -154,11 +157,12 @@ export const CustomerService = {
       registerId: registerId || null,
       userId: userId || null,
       createdAt: datetime,
+      businessUnitId: businessUnit?.id || customer.businessUnitId || null,
     });
   },
 
-  async registerPayment(id, { amount, methodName, description }, userId) {
-    const customer = await requireCustomer(id);
+  async registerPayment(id, { amount, methodName, description }, userId, businessUnit = null) {
+    const customer = await requireCustomer(id, businessUnit);
 
     const value = round2(amount);
     if (!value || value <= 0) {
@@ -177,8 +181,8 @@ export const CustomerService = {
     );
     if (!matched) throw { status: 400, message: "Método de pago inválido." };
 
-    const openRegister = await CashRegisterModel.findOpen();
-    if (!openRegister) {
+    const openRegister = businessUnit?.code === "WAREHOUSE" ? null : await CashRegisterModel.findOpen();
+    if (businessUnit?.code !== "WAREHOUSE" && !openRegister) {
       throw {
         status: 400,
         message: "No hay una caja abierta. Abrí la caja antes de registrar cobros.",
@@ -188,13 +192,13 @@ export const CustomerService = {
     const { datetime } = getArgentinaTime();
     return db.transaction(async (tx) => {
       const balance = await tx.select({
-        charges: sql`COALESCE(SUM(CASE WHEN ${accountMovements.type} = 'cargo' THEN ${accountMovements.amount} ELSE 0 END), 0)`,
+        charges: sql`COALESCE(SUM(CASE WHEN ${accountMovements.type} = 'cargo' THEN ${accountMovements.amount} WHEN ${accountMovements.type} = 'reversion_cargo' THEN -${accountMovements.amount} ELSE 0 END), 0)`,
         payments: sql`COALESCE(SUM(CASE WHEN ${accountMovements.type} = 'pago' THEN ${accountMovements.amount} ELSE 0 END), 0)`,
       }).from(accountMovements).where(eq(accountMovements.customerId, customer.id)).then((rows) => rows[0]);
       const debt = debtFrom({ charges: Number(balance?.charges || 0), payments: Number(balance?.payments || 0) });
       if (debt <= 0) throw { status: 400, message: "El cliente no tiene deuda pendiente." };
       if (value > debt) throw { status: 400, message: `El pago no puede superar la deuda actual ($${debt.toFixed(2)}).` };
-      const [movement] = await tx.insert(accountMovements).values({ customerId: customer.id, type: "pago", amount: value, transactionId: null, methodName: matched.name, detail: String(description || "").trim() || null, registerId: openRegister.id, userId: userId || null, createdAt: datetime }).returning();
+      const [movement] = await tx.insert(accountMovements).values({ customerId: customer.id, type: "pago", amount: value, transactionId: null, methodName: matched.name, detail: String(description || "").trim() || null, registerId: openRegister?.id || null, userId: userId || null, businessUnitId: businessUnit?.id || customer.businessUnitId || null, createdAt: datetime }).returning();
       return { ...movement, debt: round2(debt - value) };
     });
   },
@@ -203,7 +207,7 @@ export const CustomerService = {
     return AccountMovementModel.findPaymentsByRegisterId(Number(registerId));
   },
 
-  async listMovements() {
-    return AccountMovementModel.findRecentWithCustomers();
+  async listMovements(businessUnit = null) {
+    return AccountMovementModel.findRecentWithCustomers(businessUnit?.id);
   },
 };

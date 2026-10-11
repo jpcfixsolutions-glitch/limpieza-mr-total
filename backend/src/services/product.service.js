@@ -2,6 +2,10 @@ import { ProductModel } from "../models/product.model.js";
 import { ProductPriceTierModel } from "../models/productPriceTier.model.js";
 import { PRODUCT_ICONS, roundPriceUpToTen } from "../constants.js";
 import { getArgentinaTime } from "../db/timeUtils.js";
+import { and, eq } from "drizzle-orm";
+import { db } from "../db/client.js";
+import { businessUnitProducts, productPriceTiers, products, stockModifications } from "../db/schema.js";
+import { adjustInventoryInTransaction, ensureInventoryBalance } from "./inventory.service.js";
 
 const VALID_ICONS = new Set(PRODUCT_ICONS);
 
@@ -82,6 +86,12 @@ function normalizePriceTiers(priceTiers) {
   return list.sort((a, b) => a.quantity - b.quantity);
 }
 
+function normalizeStock(value, label = "El stock") {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) throw { status: 400, message: `${label} debe ser un entero mayor o igual a cero.` };
+  return parsed;
+}
+
 async function attachTiers(products) {
   const list = Array.isArray(products) ? products.filter(Boolean) : (products ? [products] : []);
   if (list.length === 0) return products;
@@ -97,20 +107,24 @@ async function attachTiers(products) {
 }
 
 export const ProductService = {
-  async getAll() {
-    return attachTiers(await ProductModel.findAll());
+  async getAll(businessUnit = null) {
+    return attachTiers(businessUnit?.id
+      ? await ProductModel.findAllForUnit(businessUnit.id)
+      : await ProductModel.findAll());
   },
 
-  async getByCodbarra(codbarra) {
+  async getByCodbarra(codbarra, businessUnit = null) {
     const normalized = normalizeCodbarra(codbarra);
     if (!normalized) throw { status: 400, message: "Código de barras inválido." };
 
-    const product = await ProductModel.findByCodbarra(normalized);
+    const product = businessUnit?.id
+      ? await ProductModel.findByCodbarraForUnit(normalized, businessUnit.id)
+      : await ProductModel.findByCodbarra(normalized);
     if (!product) throw { status: 404, message: "Producto no encontrado con ese código de barras." };
     return attachTiers(product);
   },
 
-  async create({ name, codbarra, categoryId, priceGroupId, packTypeId, cost, price, stock, minStock, icon, isAvailable, unitsPerPack, packPrice, priceTiers }) {
+  async create({ name, codbarra, categoryId, priceGroupId, packTypeId, cost, price, stock, minStock, icon, isAvailable, unitsPerPack, packPrice, priceTiers, fulfillmentMode }, businessUnit = null) {
     if (!name || price === undefined) {
       throw { status: 400, message: "Nombre y precio son requeridos." };
     }
@@ -121,6 +135,50 @@ export const ProductService = {
     const normalizedCodbarra = normalizeCodbarra(codbarra);
     const pack = normalizePackFields({ unitsPerPack, packPrice });
     const tiers = normalizePriceTiers(priceTiers) || [];
+
+    if (businessUnit?.id) {
+      const inventoryStock = normalizeStock(stock ?? 0);
+      const inventoryMin = normalizeStock(minStock ?? 5, "El stock mínimo");
+      const normalizedCost = normalizeMoney(cost ?? 0, "El costo");
+      const normalizedPrice = normalizeCatalogPrice(price, "El precio unitario");
+      const mode = businessUnit.code === "LOCAL" && fulfillmentMode === "WAREHOUSE_DIRECT"
+        ? "WAREHOUSE_DIRECT" : "OWN_STOCK";
+      try {
+        const productId = await db.transaction(async (tx) => {
+          const [created] = await tx.insert(products).values({
+            name,
+            codbarra: normalizedCodbarra,
+            categoryId: categoryId || null,
+            priceGroupId: priceGroupId || null,
+            packTypeId: packTypeId || null,
+            cost: normalizedCost,
+            price: normalizedPrice,
+            stock: businessUnit.code === "LOCAL" ? inventoryStock : 0,
+            minStock: businessUnit.code === "LOCAL" ? inventoryMin : 0,
+            icon: icon || "Package",
+            isAvailable: businessUnit.code === "LOCAL" ? isAvailable !== false : true,
+            unitsPerPack: pack.unitsPerPack,
+            packPrice: pack.packPrice,
+          }).returning();
+          await tx.insert(businessUnitProducts).values({
+            businessUnitId: businessUnit.id,
+            productId: created.id,
+            stock: inventoryStock,
+            minStock: inventoryMin,
+            cost: normalizedCost,
+            salePrice: normalizedPrice,
+            isAvailable: isAvailable !== false,
+            fulfillmentMode: mode,
+            updatedAt: getArgentinaTime().datetime,
+          });
+          if (tiers.length) await tx.insert(productPriceTiers).values(tiers.map((tier) => ({ ...tier, productId: created.id })));
+          return created.id;
+        });
+        return attachTiers(await ProductModel.findByIdForUnit(productId, businessUnit.id));
+      } catch (error) {
+        throwFriendlyDuplicateCodbarraError(error, normalizedCodbarra);
+      }
+    }
 
     try {
       const [created] = await ProductModel.create({
@@ -144,8 +202,10 @@ export const ProductService = {
     }
   },
 
-  async update(id, updates) {
-    const product = await ProductModel.findById(id);
+  async update(id, updates, businessUnit = null, userId = null) {
+    const product = businessUnit?.id
+      ? await ProductModel.findByIdForUnit(Number(id), businessUnit.id)
+      : await ProductModel.findById(id);
     if (!product) throw { status: 404, message: "Producto no encontrado." };
 
     const recordStockModification = updates.recordStockModification === true;
@@ -206,6 +266,65 @@ export const ProductService = {
         }
       : null;
 
+    if (businessUnit?.id) {
+      const inventoryFields = {};
+      if ("stock" in updates) inventoryFields.stock = normalizeStock(updates.stock);
+      if ("minStock" in updates) inventoryFields.minStock = normalizeStock(updates.minStock, "El stock mínimo");
+      if ("cost" in updates) inventoryFields.cost = updates.cost;
+      if ("price" in updates) inventoryFields.salePrice = updates.price;
+      if ("isAvailable" in updates) inventoryFields.isAvailable = updates.isAvailable !== false;
+      if ("fulfillmentMode" in updates) {
+        inventoryFields.fulfillmentMode = businessUnit.code === "LOCAL" && updates.fulfillmentMode === "WAREHOUSE_DIRECT"
+          ? "WAREHOUSE_DIRECT" : "OWN_STOCK";
+      }
+      const catalogFields = {};
+      for (const key of ["name", "codbarra", "categoryId", "priceGroupId", "packTypeId", "icon", "unitsPerPack", "packPrice"]) {
+        if (key in updates) catalogFields[key] = updates[key];
+      }
+      if (businessUnit.code === "LOCAL") {
+        if ("cost" in updates) catalogFields.cost = updates.cost;
+        if ("price" in updates) catalogFields.price = updates.price;
+        if ("minStock" in updates) catalogFields.minStock = inventoryFields.minStock;
+        if ("isAvailable" in updates) catalogFields.isAvailable = inventoryFields.isAvailable;
+      }
+      try {
+        await db.transaction(async (tx) => {
+          const balance = await ensureInventoryBalance(tx, businessUnit.id, Number(id));
+          if ("stock" in inventoryFields && Number(inventoryFields.stock) !== Number(balance.stock)) {
+            const direction = inventoryFields.stock > Number(balance.stock) ? "IN" : "OUT";
+            await adjustInventoryInTransaction(tx, {
+              businessUnitId: businessUnit.id,
+              productId: Number(id),
+              direction,
+              quantity: Math.abs(inventoryFields.stock - Number(balance.stock)),
+              movementType: "MANUAL_ADJUSTMENT",
+              unitCost: inventoryFields.cost ?? balance.cost,
+              sourceType: "product_adjustment",
+              sourceId: id,
+              idempotencyKey: `adjust:${businessUnit.id}:${id}:${Date.now()}:${Math.random()}`,
+              userId,
+              notes: "Ajuste manual desde inventario",
+            });
+            delete inventoryFields.stock;
+          }
+          if (Object.keys(inventoryFields).length) {
+            await tx.update(businessUnitProducts).set({ ...inventoryFields, updatedAt: getArgentinaTime().datetime })
+              .where(and(eq(businessUnitProducts.businessUnitId, businessUnit.id), eq(businessUnitProducts.productId, Number(id))));
+          }
+          if (businessUnit.code === "LOCAL" && "stock" in updates) catalogFields.stock = normalizeStock(updates.stock);
+          if (Object.keys(catalogFields).length) await tx.update(products).set(catalogFields).where(eq(products.id, Number(id)));
+          if (nextTiers !== null) {
+            await tx.delete(productPriceTiers).where(eq(productPriceTiers.productId, Number(id)));
+            if (nextTiers.length) await tx.insert(productPriceTiers).values(nextTiers.map((tier) => ({ ...tier, productId: Number(id) })));
+          }
+          if (stockModification && businessUnit.code === "LOCAL") await tx.insert(stockModifications).values(stockModification);
+        });
+        return attachTiers(await ProductModel.findByIdForUnit(Number(id), businessUnit.id));
+      } catch (error) {
+        throwFriendlyDuplicateCodbarraError(error, updates.codbarra);
+      }
+    }
+
     try {
       return await ProductModel.updateWithDetails(Number(id), updates, {
         tiers: nextTiers,
@@ -227,9 +346,17 @@ export const ProductService = {
     return { updated: productIds.length };
   },
 
-  async remove(id) {
-    const product = await ProductModel.findById(id);
+  async remove(id, businessUnit = null) {
+    const product = businessUnit?.id
+      ? await ProductModel.findByIdForUnit(Number(id), businessUnit.id)
+      : await ProductModel.findById(id);
     if (!product) throw { status: 404, message: "Producto no encontrado." };
+    if (businessUnit?.id) {
+      await db.update(businessUnitProducts).set({ isAvailable: false, updatedAt: getArgentinaTime().datetime })
+        .where(and(eq(businessUnitProducts.businessUnitId, businessUnit.id), eq(businessUnitProducts.productId, Number(id))));
+      if (businessUnit.code === "LOCAL") await db.update(products).set({ isAvailable: false }).where(eq(products.id, Number(id)));
+      return { message: "Producto desactivado para la unidad." };
+    }
     await ProductModel.remove(id);
     return { message: "Producto eliminado." };
   },

@@ -1,25 +1,25 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { customers } from "../db/schema.js";
 
 export const CustomerModel = {
-  findAll() {
+  findAll(businessUnitId = null) {
     return db
       .select()
       .from(customers)
-      .where(eq(customers.isActive, true))
+      .where(businessUnitId ? and(eq(customers.isActive, true), eq(customers.businessUnitId, businessUnitId)) : eq(customers.isActive, true))
       .orderBy(asc(customers.lastName), asc(customers.name));
   },
 
-  findById(id) {
-    return db.select().from(customers).where(eq(customers.id, id)).then((r) => r[0]);
+  findById(id, businessUnitId = null) {
+    return db.select().from(customers).where(businessUnitId ? and(eq(customers.id, id), eq(customers.businessUnitId, businessUnitId)) : eq(customers.id, id)).then((r) => r[0]);
   },
 
-  findByDocument(document) {
+  findByDocument(document, businessUnitId = null) {
     return db
       .select()
       .from(customers)
-      .where(eq(customers.document, document))
+      .where(businessUnitId ? and(eq(customers.document, document), eq(customers.businessUnitId, businessUnitId)) : eq(customers.document, document))
       .then((r) => r[0]);
   },
 
