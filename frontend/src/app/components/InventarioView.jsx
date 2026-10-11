@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Search, Plus, Edit2, Trash2, AlertTriangle, X, Package, ScanBarcode, Tags } from "lucide-react";
+import { Search, Plus, Edit2, Trash2, AlertTriangle, X, Package, ScanBarcode, Tags, PackageMinus } from "lucide-react";
 import { Loader } from "./Loader.jsx";
 import { toast } from "sonner";
 import api from "../../services/api.js";
@@ -9,6 +9,7 @@ import { formatCatalogPrice, roundPriceInput } from "../../utils/price.js";
 import { PaginationBar, paginate, byNameEs } from "./PaginationBar.jsx";
 import { PRODUCT_ICON_OPTIONS } from "../../utils/productIcons.js";
 import { PromotionModal } from "./PromotionModal.jsx";
+import { ProductExtractionModal } from "./ProductExtractionModal.jsx";
 
 const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", cost: "", categoryId: null, priceGroupId: null, stock: "", minStock: "", icon: "Package", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [] };
 const PRODUCT_DRAFT_STORAGE_KEY = "descartables-yofre:product-draft";
@@ -82,6 +83,7 @@ export function InventarioView() {
   const [inventory, setInventory] = useState([]);
   const [promotions, setPromotions] = useState([]);
   const [promotionModalOpen, setPromotionModalOpen] = useState(false);
+  const [extractionModalOpen, setExtractionModalOpen] = useState(false);
   const [editingPromotion, setEditingPromotion] = useState(null);
   const [categories, setCategories] = useState([]);
   const [initialProductDraft] = useState(() => loadProductDraft());
@@ -263,7 +265,7 @@ export function InventarioView() {
 
   useBarcodeScanner({
     onScan: handleBarcodeScan,
-    enabled: !productModal.isOpen && !deleteModal.isOpen,
+    enabled: !productModal.isOpen && !deleteModal.isOpen && !extractionModalOpen,
   });
 
   const handleSearchKeyDown = (e) => {
@@ -492,7 +494,7 @@ export function InventarioView() {
           />
           <ScanBarcode className="absolute right-4 top-1/2 -translate-y-1/2 text-foreground/40" size={20} title="Escaneá para abrir edición" />
         </div>
-        <div className="flex gap-2 shrink-0 flex-wrap"><button onClick={() => setPromotionModalOpen(true)} className="bg-primary hover:brightness-110 text-foreground font-bold px-4 py-3 md:py-4 rounded-xl flex items-center justify-center gap-2 transition-all text-sm shadow-md"><Tags size={18} /> Nueva Promoción</button><button onClick={handleAddProduct} className="bg-secondary hover:brightness-125 text-foreground font-bold px-5 py-3 md:py-4 rounded-xl flex items-center justify-center gap-2 transition-all text-sm md:text-base shadow-md shadow-secondary/20"><Plus size={20} /> Nuevo Producto</button></div>
+        <div className="flex gap-2 shrink-0 flex-wrap"><button onClick={() => setPromotionModalOpen(true)} className="bg-primary hover:brightness-110 text-foreground font-bold px-4 py-3 md:py-4 rounded-xl flex items-center justify-center gap-2 transition-all text-sm shadow-md"><Tags size={18} /> Nueva Promoción</button><button onClick={() => setExtractionModalOpen(true)} className="bg-surface border border-foreground/20 hover:bg-background text-foreground font-bold px-4 py-3 md:py-4 rounded-xl flex items-center justify-center gap-2 transition-all text-sm shadow-md"><PackageMinus size={18} /> Extraer productos</button><button onClick={handleAddProduct} className="bg-secondary hover:brightness-125 text-foreground font-bold px-5 py-3 md:py-4 rounded-xl flex items-center justify-center gap-2 transition-all text-sm md:text-base shadow-md shadow-secondary/20"><Plus size={20} /> Nuevo Producto</button></div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
@@ -593,7 +595,7 @@ export function InventarioView() {
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
                       <td className="p-4 max-w-[140px]"><span className="text-foreground/40 font-medium text-sm">—</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
-                      <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
+                      <td className="p-4 whitespace-nowrap"><span className="text-foreground font-bold">${formatCatalogPrice(row.cost || 0)}</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground font-black">${formatCatalogPrice(row.price)}</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground font-bold">{row.availableQuantity} u.</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
@@ -688,6 +690,8 @@ export function InventarioView() {
           </div>
         )}
       </div>
+
+      {extractionModalOpen && <ProductExtractionModal products={inventory} onClose={() => setExtractionModalOpen(false)} onCreated={fetchData} />}
 
       {productModal.isOpen && productModal.item && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">

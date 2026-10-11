@@ -2,6 +2,14 @@ import { StatsService } from "../services/stats.service.js";
 import { sendControllerError } from "./controllerError.js";
 
 export const StatsController = {
+  async getProfitability(req, res) {
+    try {
+      res.json(await StatsService.getProfitability(req.query));
+    } catch (err) {
+      sendControllerError(res, err);
+    }
+  },
+
   async getRestockCost(req, res) {
     try {
       res.json(await StatsService.getRestockCost());

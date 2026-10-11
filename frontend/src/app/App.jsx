@@ -106,6 +106,8 @@ export default function App() {
     const payload = {
       total: transaction.total,
       customerId: transaction.customerId ?? null,
+      discountPercent: transaction.discountPercent ?? 0,
+      discountAmount: transaction.discountAmount ?? 0,
       payments: transaction.payments,
       items: transaction.items,
     };

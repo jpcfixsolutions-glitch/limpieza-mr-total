@@ -124,6 +124,9 @@ export const transactions = sqliteTable("transactions", {
     .notNull()
     .references(() => cashRegisters.id),
   total: real("total").notNull(),
+  status: text("status", { enum: ["completed", "cancelled"] }).notNull().default("completed"),
+  discountPercent: real("discount_percent").notNull().default(0),
+  discountAmount: real("discount_amount").notNull().default(0),
   date: text("date").notNull(), // "DD/MM/YYYY"
   time: text("time").notNull(), // "HH:MM"
   createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
@@ -157,6 +160,9 @@ export const transactionItems = sqliteTable("transaction_items", {
   }),
   promotionId: integer("promotion_id").references(() => promotions.id, { onDelete: "set null" }),
   productName: text("product_name").notNull(),
+  // Snapshot al momento de la venta. No debe depender del costo actual del catálogo.
+  unitCost: real("unit_cost"),
+  categoryName: text("category_name"),
   price: real("price").notNull(),
   quantity: integer("quantity").notNull(),
   total: real("total").notNull(),
@@ -224,6 +230,30 @@ export const internalWithdrawals = sqliteTable("internal_withdrawals", {
   productName: text("product_name").notNull(),
   quantity: integer("quantity").notNull(),
   createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
+});
+
+// ─── Extracciones de productos ──────────────────────────────────────────────
+// Estas operaciones valorizan mercadería retirada; no son movimientos de caja.
+export const productExtractions = sqliteTable("product_extractions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  userName: text("user_name").notNull(),
+  reason: text("reason", { enum: ["uso_interno", "rotura_dano", "vencimiento", "donacion", "otro"] }).notNull(),
+  reasonDetail: text("reason_detail"),
+  observations: text("observations"),
+  totalCost: real("total_cost").notNull(),
+  totalUnits: integer("total_units").notNull(),
+  createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
+});
+
+export const productExtractionItems = sqliteTable("product_extraction_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  extractionId: integer("extraction_id").notNull().references(() => productExtractions.id, { onDelete: "cascade" }),
+  productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+  productName: text("product_name").notNull(),
+  quantity: integer("quantity").notNull(),
+  unitCost: real("unit_cost").notNull(),
+  subtotalCost: real("subtotal_cost").notNull(),
 });
 
 // ─── Clientes (cuenta corriente) ──────────────────────────────────────────────

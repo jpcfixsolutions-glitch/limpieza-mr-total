@@ -149,7 +149,11 @@ export function PaymentModal({ total, paymentMethods, onClose, onConfirm }) {
         });
       }
 
-      await onConfirm(finalPayments, { customerId: customer?.id ?? null });
+      await onConfirm(finalPayments, {
+        customerId: customer?.id ?? null,
+        discountPercent: appliedDiscount ?? 0,
+        discountAmount,
+      });
     } finally {
       setSubmitting(false);
     }

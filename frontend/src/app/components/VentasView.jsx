@@ -217,12 +217,19 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
 
   const handleConfirmPayment = async (payments, meta = {}) => {
     const finalTotal = payments.reduce((sum, p) => sum + p.finalAmount, 0);
+    // El total de cada línea debe reflejar el descuento aplicado. Los recargos de
+    // medios de pago no forman parte del ingreso neto de los productos.
+    const netItemsTotal = payments.reduce((sum, p) => sum + (Number(p.baseAmount) || 0), 0);
+    const grossItemsTotal = cartItems.reduce((sum, item) => sum + Number(item.price) * Number(item.quantity), 0);
+    const netFactor = grossItemsTotal > 0 ? netItemsTotal / grossItemsTotal : 1;
     const accountTotal = payments
       .filter((p) => p.type === ACCOUNT_METHOD_NAME)
       .reduce((sum, p) => sum + p.finalAmount, 0);
     const transaction = {
       total: finalTotal,
       customerId: meta.customerId ?? null,
+      discountPercent: meta.discountPercent ?? 0,
+      discountAmount: meta.discountAmount ?? 0,
       payments: payments.map((p) => ({
         type: p.type,
         amount: p.finalAmount,
@@ -235,7 +242,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
         name: item.name,
         price: item.price,
         quantity: item.quantity,
-        total: item.price * item.quantity,
+        total: Number(item.price) * Number(item.quantity) * netFactor,
         saleMode: item.saleMode || "unidad",
         unitsPerPack: item.unitsPerPack || 1,
       })),

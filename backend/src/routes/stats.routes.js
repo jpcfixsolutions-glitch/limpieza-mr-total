@@ -6,6 +6,7 @@ import { requireRole } from "../middleware/role.middleware.js";
 const router = Router();
 
 router.get("/restock", authenticate, requireRole("admin"), StatsController.getRestockCost);
+router.get("/profitability", authenticate, requireRole("admin"), StatsController.getProfitability);
 router.get("/activity-log", authenticate, StatsController.getActivityLog);
 router.post("/stock-modifications", authenticate, requireRole("admin"), StatsController.createStockModification);
 

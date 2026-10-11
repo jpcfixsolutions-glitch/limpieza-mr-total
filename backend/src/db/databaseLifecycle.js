@@ -6,6 +6,58 @@ const MIGRATIONS_TABLE = "app_migrations";
 
 const migrations = [
   {
+    id: "20261011_011_transaction_discount_metadata",
+    statements: [
+      "ALTER TABLE transactions ADD COLUMN discount_percent REAL NOT NULL DEFAULT 0",
+      "ALTER TABLE transactions ADD COLUMN discount_amount REAL NOT NULL DEFAULT 0",
+    ],
+  },
+  {
+    id: "20261011_010_transaction_item_historical_cost",
+    statements: [
+      "ALTER TABLE transactions ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'",
+      "ALTER TABLE transaction_items ADD COLUMN unit_cost REAL",
+      "ALTER TABLE transaction_items ADD COLUMN category_name TEXT",
+      // Las ventas anteriores no tenían snapshot. Se preserva el dato disponible al migrar,
+      // mientras que todas las ventas nuevas guardan el costo exacto de la operación.
+      `UPDATE transaction_items
+       SET unit_cost = COALESCE((SELECT cost FROM products WHERE products.id = transaction_items.product_id), 0)
+       WHERE unit_cost IS NULL`,
+      `UPDATE transaction_items
+       SET category_name = (SELECT categories.name FROM products LEFT JOIN categories ON categories.id = products.category_id WHERE products.id = transaction_items.product_id)
+       WHERE category_name IS NULL`,
+      "CREATE INDEX IF NOT EXISTS transaction_items_product_id_idx ON transaction_items (product_id)",
+      "CREATE INDEX IF NOT EXISTS transactions_created_at_idx ON transactions (created_at)",
+    ],
+  },
+  {
+    id: "20261010_009_product_extractions",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS product_extractions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        user_name TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        reason_detail TEXT,
+        observations TEXT,
+        total_cost REAL NOT NULL,
+        total_units INTEGER NOT NULL,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+      )`,
+      `CREATE TABLE IF NOT EXISTS product_extraction_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        extraction_id INTEGER NOT NULL REFERENCES product_extractions(id) ON DELETE CASCADE,
+        product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+        product_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL CHECK(quantity > 0),
+        unit_cost REAL NOT NULL,
+        subtotal_cost REAL NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS product_extractions_created_idx ON product_extractions (created_at)",
+      "CREATE INDEX IF NOT EXISTS product_extraction_items_extraction_idx ON product_extraction_items (extraction_id)",
+    ],
+  },
+  {
     id: "20261009_008_combined_promotions",
     statements: [
       `CREATE TABLE IF NOT EXISTS promotions (

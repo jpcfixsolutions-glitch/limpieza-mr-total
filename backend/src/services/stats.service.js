@@ -1,15 +1,17 @@
 import { db } from "../db/client.js";
-import { sql, desc } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
 import {
   products,
   cashRegisters,
   transactions,
   transactionPayments,
   transactionItems,
+  categories,
   dailyExpenses,
   stockModifications,
   internalWithdrawals,
 } from "../db/schema.js";
+import { calculateProfitability } from "./profitability.js";
 import { CashRegisterModel } from "../models/cashRegister.model.js";
 import { TransactionModel } from "../models/transaction.model.js";
 import { DailyExpenseModel } from "../models/dailyExpense.model.js";
@@ -20,6 +22,38 @@ import { CustomerModel } from "../models/customer.model.js";
 import { getArgentinaTime } from "../db/timeUtils.js";
 
 export const StatsService = {
+  async getProfitability({ from, to, productId, categoryId } = {}) {
+    const conditions = [];
+    if (from) conditions.push(gte(transactions.createdAt, `${from} 00:00:00`));
+    if (to) conditions.push(lte(transactions.createdAt, `${to} 23:59:59`));
+    if (productId) conditions.push(eq(transactionItems.productId, Number(productId)));
+    if (categoryId) conditions.push(eq(products.categoryId, Number(categoryId)));
+
+    // Sólo se contabilizan ventas confirmadas. Aún no hay flujo de devoluciones en
+    // este sistema, por lo que no existen movimientos a descontar de este reporte.
+    conditions.push(eq(transactions.status, "completed"));
+    const query = db
+      .select({
+        productId: transactionItems.productId,
+        promotionId: transactionItems.promotionId,
+        productName: transactionItems.productName,
+        categoryName: transactionItems.categoryName,
+        unitCost: transactionItems.unitCost,
+        price: transactionItems.price,
+        quantity: transactionItems.quantity,
+        total: transactionItems.total,
+        promotionComposition: transactionItems.promotionComposition,
+        createdAt: transactions.createdAt,
+      })
+      .from(transactionItems)
+      .innerJoin(transactions, eq(transactionItems.transactionId, transactions.id))
+      .leftJoin(products, eq(transactionItems.productId, products.id))
+      .leftJoin(categories, eq(products.categoryId, categories.id))
+      .orderBy(asc(transactions.createdAt));
+    const items = conditions.length ? await query.where(and(...conditions)) : await query;
+    return calculateProfitability(items);
+  },
+
   async getRestockCost() {
     const allProducts = await ProductModel.findAll();
     const restockCost = allProducts.reduce((sum, p) => {
@@ -92,6 +126,8 @@ export const StatsService = {
         icon: "BookUp",
         color: "text-green-600",
         bg: "bg-green-50",
+        discountPercent: Number(tx.discountPercent || 0),
+        discountAmount: Number(tx.discountAmount || 0),
       });
     }
 

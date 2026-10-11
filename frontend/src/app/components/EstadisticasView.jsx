@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
-import { DollarSign, Package, Banknote, CreditCard, TrendingDown, Wallet, RefreshCw, PackageMinus, Unlock, Lock, BookUp, Clock, ChevronDown, ChevronUp, Plus } from "lucide-react";
+import { DollarSign, Package, Banknote, CreditCard, TrendingDown, Wallet, RefreshCw, PackageMinus, Unlock, Lock, BookUp, Clock, ChevronDown, ChevronUp, Plus, Eye } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../services/api.js";
 import { Loader } from "./Loader.jsx";
 import { DailyExpenseModal } from "./DailyExpenseModal.jsx";
+import { ProductExtractionHistoryModal } from "./ProductExtractionHistoryModal.jsx";
+import { RentabilidadView } from "./RentabilidadView.jsx";
 
 // Formateador de fecha en hora Argentina
 const arFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
@@ -36,6 +38,7 @@ function fmtDDMM(str) {
 const MONTH_NAMES_LONG  = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
 export function EstadisticasView() {
+  const [statsTab, setStatsTab] = useState("summary");
   const [period, setPeriod]               = useState("mensual");
   const [cajasCerradas, setCajasCerradas] = useState([]);
   const [gastosFijos, setGastosFijos]     = useState([]);
@@ -49,13 +52,15 @@ export function EstadisticasView() {
   const [histTab, setHistTab]             = useState("mes"); // "mes" | "semana"
   const [expandedHist, setExpandedHist]   = useState(null);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
+  const [extractionSummary, setExtractionSummary] = useState({ totalCost: 0, operations: 0 });
+  const [showExtractionHistory, setShowExtractionHistory] = useState(false);
 
   const LOG_ICONS = { Unlock, Lock, Wallet, BookUp, PackageMinus, Package };
 
   const fetchStats = async () => {
     setLoading(true);
     try {
-      const [rCajas, rFijos, rDiarios, rProd, rRestock, rLog, rStatus] = await Promise.allSettled([
+      const [rCajas, rFijos, rDiarios, rProd, rRestock, rLog, rStatus, rExtractions] = await Promise.allSettled([
         api.get("/cash-register/closed"),
         api.get("/fixed-expenses"),
         api.get("/daily-expenses"),
@@ -63,6 +68,7 @@ export function EstadisticasView() {
         api.get("/stats/restock"),
         api.get("/stats/activity-log"),
         api.get("/cash-register/status"),
+        api.get("/product-extractions/summary", { params: { from: period === "semanal" ? getMondayOf(hoyAR()) : period === "mensual" ? `${hoyAR().slice(0, 8)}01` : undefined, to: hoyAR() } }),
       ]);
       if (rCajas.status   === "fulfilled") setCajasCerradas(rCajas.value.data);
       if (rFijos.status   === "fulfilled") setGastosFijos(rFijos.value.data);
@@ -82,14 +88,13 @@ export function EstadisticasView() {
           setTransaccionesCaja([]);
         }
       }
+      if (rExtractions.status === "fulfilled") setExtractionSummary(rExtractions.value.data);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchStats();
-  }, []);
+  useEffect(() => { fetchStats(); }, [period]);
 
   const handleDailyExpense = async (expenseData) => {
     try {
@@ -102,6 +107,10 @@ export function EstadisticasView() {
       throw err;
     }
   };
+
+  if (statsTab === "profitability") {
+    return <RentabilidadView onSelectOverview={() => setStatsTab("summary")} />;
+  }
 
   // ── Cutoffs de período ────────────────────────────────────────────────────
   const today        = hoyAR();                          // "YYYY-MM-DD"
@@ -210,6 +219,10 @@ export function EstadisticasView() {
         </div>
         <div className="flex items-center gap-3 self-start sm:self-auto flex-wrap">
           <div className="bg-surface p-1 rounded-xl border border-foreground/15 shadow-sm flex gap-1">
+            <button onClick={() => setStatsTab("summary")} className="px-4 py-2 rounded-lg text-sm font-bold bg-secondary text-foreground">Resumen</button>
+            <button onClick={() => setStatsTab("profitability")} className="px-4 py-2 rounded-lg text-sm font-bold text-foreground/70 hover:text-foreground">Rentabilidad</button>
+          </div>
+          <div className="bg-surface p-1 rounded-xl border border-foreground/15 shadow-sm flex gap-1">
             {["todo","mensual","semanal"].map((p) => (
               <button key={p} onClick={() => setPeriod(p)}
                 className={`px-4 md:px-6 py-2 rounded-lg text-sm font-bold transition-all shadow-sm ${period === p ? "bg-secondary text-foreground" : "bg-transparent text-foreground/70 hover:text-foreground"}`}>
@@ -221,7 +234,7 @@ export function EstadisticasView() {
       </div>
 
       {/* Tarjetas stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6 mb-8">
         <div className="bg-surface rounded-xl p-6 border border-foreground/15 shadow-sm">
           <div className="flex items-center gap-3 mb-4 text-success"><DollarSign size={20}/><h3 className="text-foreground/80 font-bold">Ingresos Totales</h3></div>
           <p className="text-3xl font-black">{monto(revenue.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-foreground")}</p>
@@ -249,6 +262,11 @@ export function EstadisticasView() {
               ? `Fondo $${fondoInicialCaja.toFixed(2)} + ventas $${efectivoVentasCaja.toFixed(2)}${extraccionesEfectivoCaja>0?` − $${extraccionesEfectivoCaja.toFixed(2)}`:""}` 
               : "Abrí la caja para ver el total"}
           </p>
+        </div>
+        <div className="bg-surface rounded-xl p-6 border border-orange-400/30 shadow-sm">
+          <div className="flex items-center justify-between gap-3 mb-4 text-orange-600"><div className="flex items-center gap-3"><PackageMinus size={20}/><h3 className="text-foreground/80 font-bold">Valor de productos extraídos</h3></div><button onClick={() => setShowExtractionHistory(true)} title="Ver detalle" className="p-2 rounded-lg hover:bg-surface"><Eye size={18}/></button></div>
+          <p className="text-3xl font-black">{monto(Number(extractionSummary.totalCost || 0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-foreground")}</p>
+          <p className="text-foreground/60 font-medium text-sm mt-2">{extractionSummary.operations || 0} operación{extractionSummary.operations === 1 ? "" : "es"} en el período</p>
         </div>
       </div>
 
@@ -340,6 +358,7 @@ export function EstadisticasView() {
           onSubmit={handleDailyExpense}
         />
       )}
+      {showExtractionHistory && <ProductExtractionHistoryModal from={period === "semanal" ? semanaInicio : period === "mensual" ? mesInicio : ""} to={today} onClose={() => setShowExtractionHistory(false)} />}
 
       {/* Movimientos */}
       <div className="mb-12">
@@ -357,7 +376,7 @@ export function EstadisticasView() {
                 <div key={log.id} className="bg-background rounded-lg p-3 border border-foreground/15 shadow-sm flex items-start gap-3">
                   <div className={`p-2 rounded-lg ${log.bg} ${log.color} shrink-0 mt-0.5`}><Icon size={16}/></div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-foreground text-sm font-bold">{log.type}</p>
+                    <div className="flex items-center gap-2 flex-wrap"><p className="text-foreground text-sm font-bold">{log.type}</p>{log.discountPercent > 0 && <span className="text-[10px] font-black uppercase tracking-wide bg-success/15 text-success px-2 py-0.5 rounded-full">Descuento {Number(log.discountPercent).toFixed(0)}%</span>}</div>
                     <p className="text-foreground/70 font-medium text-xs leading-relaxed">{log.details}</p>
                   </div>
                   <div className="text-right shrink-0">

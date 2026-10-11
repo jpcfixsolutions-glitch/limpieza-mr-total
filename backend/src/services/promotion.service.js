@@ -25,7 +25,7 @@ function attachAvailability(promotions, componentRows) {
   const componentsByPromotion = new Map();
   for (const row of componentRows) {
     const list = componentsByPromotion.get(row.promotionId) || [];
-    list.push({ productId: row.productId, name: row.name, codbarra: row.codbarra, quantity: Number(row.quantity), stock: Number(row.stock), isAvailable: row.isAvailable });
+    list.push({ productId: row.productId, name: row.name, codbarra: row.codbarra, quantity: Number(row.quantity), stock: Number(row.stock), cost: Number(row.cost || 0), isAvailable: row.isAvailable });
     componentsByPromotion.set(row.promotionId, list);
   }
   return promotions.map((promotion) => {
@@ -33,7 +33,8 @@ function attachAvailability(promotions, componentRows) {
     const availability = items.length
       ? Math.max(0, Math.min(...items.map((item) => item.isAvailable ? Math.floor(item.stock / item.quantity) : 0)))
       : 0;
-    return { ...promotion, items, availableQuantity: availability, isAvailable: promotion.isAvailable && availability > 0 };
+    const cost = items.reduce((sum, item) => sum + item.cost * item.quantity, 0);
+    return { ...promotion, items, cost, availableQuantity: availability, isAvailable: promotion.isAvailable && availability > 0 };
   });
 }
 

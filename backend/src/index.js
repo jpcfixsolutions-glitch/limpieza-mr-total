@@ -19,6 +19,7 @@ import priceGroupRoutes from "./routes/priceGroup.routes.js";
 import packTypeRoutes from "./routes/packType.routes.js";
 import customerRoutes from "./routes/customer.routes.js";
 import promotionRoutes from "./routes/promotion.routes.js";
+import productExtractionRoutes from "./routes/productExtraction.routes.js";
 
 await initializeDatabase();
 
@@ -83,6 +84,7 @@ app.use("/api/price-groups", priceGroupRoutes);
 app.use("/api/pack-types", packTypeRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/promotions", promotionRoutes);
+app.use("/api/product-extractions", productExtractionRoutes);
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 

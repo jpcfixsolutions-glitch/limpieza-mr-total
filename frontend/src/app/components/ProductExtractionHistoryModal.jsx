@@ -1,0 +1,17 @@
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
+import api from "../../services/api.js";
+
+const REASONS = { uso_interno: "Uso interno", rotura_dano: "Rotura / Daño", vencimiento: "Vencimiento", donacion: "Donación", otro: "Otro" };
+
+export function ProductExtractionHistoryModal({ from, to, onClose }) {
+  const [data, setData] = useState({ rows: [], total: 0 });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState(null);
+  useEffect(() => { api.get("/product-extractions", { params: { from, to, pageSize: 100 } }).then((res) => setData(res.data)).catch((err) => setError(err.response?.data?.message || "No se pudo cargar el historial.")).finally(() => setLoading(false)); }, [from, to]);
+  return <div className="fixed inset-0 z-50 bg-black/60 p-4 flex items-center justify-center"><div className="bg-background rounded-2xl border border-surface shadow-2xl w-full max-w-5xl max-h-[calc(100dvh-2rem)] overflow-hidden grid grid-rows-[auto_1fr]">
+    <div className="p-5 border-b border-foreground/15 flex justify-between"><div><h2 className="text-xl text-primary font-bold">Historial de extracciones</h2><p className="text-sm text-foreground/60">{from} al {to}</p></div><button onClick={onClose}><X /></button></div>
+    <div className="overflow-y-auto p-5">{loading ? <p className="text-foreground/60">Cargando…</p> : error ? <p className="text-red-500">{error}</p> : data.rows.length === 0 ? <p className="text-foreground/60 text-center py-10">No hubo extracciones en este período.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="text-foreground/60"><tr><th className="p-3 text-left">Fecha y hora</th><th className="p-3 text-left">Responsable</th><th className="p-3 text-left">Motivo</th><th className="p-3 text-right">Unidades</th><th className="p-3 text-right">Valor a costo</th><th /></tr></thead><tbody>{data.rows.map((row) => <><tr key={row.id} className="border-t border-foreground/15"><td className="p-3">{new Date(row.createdAt.replace(" ", "T")).toLocaleString("es-AR")}</td><td className="p-3">{row.userName}</td><td className="p-3">{REASONS[row.reason] || row.reason}{row.reasonDetail ? `: ${row.reasonDetail}` : ""}</td><td className="p-3 text-right">{row.totalUnits}</td><td className="p-3 text-right font-bold">${Number(row.totalCost).toFixed(2)}</td><td><button onClick={() => setExpanded(expanded === row.id ? null : row.id)} className="p-2 text-primary">{expanded === row.id ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button></td></tr>{expanded === row.id && <tr key={`${row.id}-detail`} className="bg-surface/60"><td colSpan={6} className="p-4"><p className="text-sm mb-3"><b>Observaciones:</b> {row.observations || "—"}</p><table className="w-full text-sm"><thead><tr><th className="text-left">Producto</th><th className="text-right">Cantidad</th><th className="text-right">Costo unit.</th><th className="text-right">Subtotal</th></tr></thead><tbody>{row.items.map((item) => <tr key={item.id}><td className="py-1">{item.productName}</td><td className="text-right">{item.quantity}</td><td className="text-right">${Number(item.unitCost).toFixed(2)}</td><td className="text-right font-bold">${Number(item.subtotalCost).toFixed(2)}</td></tr>)}</tbody></table></td></tr>}</>)}</tbody></table></div>}</div>
+  </div></div>;
+}

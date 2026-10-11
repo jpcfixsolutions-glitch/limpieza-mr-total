@@ -19,6 +19,7 @@ export const PromotionModel = {
       name: products.name,
       codbarra: products.codbarra,
       stock: products.stock,
+      cost: products.cost,
       isAvailable: products.isAvailable,
       quantity: promotionItems.quantity,
     })
