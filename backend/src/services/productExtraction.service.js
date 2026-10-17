@@ -4,7 +4,7 @@ import { businessUnitProducts, products, productExtractionItems, productExtracti
 import { getArgentinaTime } from "../db/timeUtils.js";
 import { adjustInventoryInTransaction } from "./inventory.service.js";
 
-const REASONS = new Set(["uso_interno", "rotura_dano", "vencimiento", "donacion", "otro"]);
+const REASONS = new Set(["uso_interno", "consumo_local", "consumo_casa", "rotura_dano", "vencimiento", "donacion", "otro"]);
 
 function integer(value, message) {
   const n = Number(value);
@@ -124,7 +124,25 @@ export const ProductExtractionService = {
     if (from) conditions.push(gte(productExtractions.createdAt, `${from} 00:00:00`));
     if (to) conditions.push(sql`${productExtractions.createdAt} < datetime(${to} || ' 00:00:00', '+1 day')`);
     const where = conditions.length ? and(...conditions) : undefined;
-    const [summary] = await db.select({ totalCost: sql`coalesce(sum(${productExtractions.totalCost}), 0)`, operations: sql`count(*)` }).from(productExtractions).where(where);
-    return { totalCost: Number(summary?.totalCost || 0), operations: Number(summary?.operations || 0) };
+    const [summary] = await db.select({
+      totalCost: sql`coalesce(sum(${productExtractions.totalCost}), 0)`,
+      operations: sql`count(*)`,
+      localCost: sql`coalesce(sum(case when ${productExtractions.reason} in ('uso_interno', 'consumo_local') then ${productExtractions.totalCost} else 0 end), 0)`,
+      localOperations: sql`sum(case when ${productExtractions.reason} in ('uso_interno', 'consumo_local') then 1 else 0 end)`,
+      homeCost: sql`coalesce(sum(case when ${productExtractions.reason} = 'consumo_casa' then ${productExtractions.totalCost} else 0 end), 0)`,
+      homeOperations: sql`sum(case when ${productExtractions.reason} = 'consumo_casa' then 1 else 0 end)`,
+    }).from(productExtractions).where(where);
+    const local = { totalCost: Number(summary?.localCost || 0), operations: Number(summary?.localOperations || 0) };
+    const home = { totalCost: Number(summary?.homeCost || 0), operations: Number(summary?.homeOperations || 0) };
+    return {
+      totalCost: Number(summary?.totalCost || 0),
+      operations: Number(summary?.operations || 0),
+      consumption: {
+        totalCost: local.totalCost + home.totalCost,
+        operations: local.operations + home.operations,
+        local,
+        home,
+      },
+    };
   },
 };

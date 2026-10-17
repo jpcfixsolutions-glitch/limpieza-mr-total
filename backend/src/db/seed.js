@@ -3,7 +3,6 @@ import bcrypt from "bcryptjs";
 import { db } from "./client.js";
 import {
   users,
-  categories,
   paymentMethods,
   subscriptionConfig,
   appSettings,
@@ -25,15 +24,10 @@ async function seed() {
   const adminEmail    = requireEnv("SEED_ADMIN_EMAIL");
   const adminPassword = await bcrypt.hash(requireEnv("SEED_ADMIN_PASSWORD"), 10);
 
-  const cajeroName     = requireEnv("SEED_CAJERO_NAME");
-  const cajeroEmail    = requireEnv("SEED_CAJERO_EMAIL");
-  const cajeroPassword = await bcrypt.hash(requireEnv("SEED_CAJERO_PASSWORD"), 10);
-
   const creadorPassword = await bcrypt.hash(requireEnv("SEED_CREADOR_PASSWORD"), 10);
 
   await db.insert(users).values([
     { name: adminName,  email: adminEmail,  password: adminPassword,  role: "admin" },
-    { name: cajeroName, email: cajeroEmail, password: cajeroPassword, role: "cajero" },
     { name: "Creador", email: requireEnv("SEED_CREADOR_EMAIL"), password: creadorPassword, role: "creador" },
   ]).onConflictDoNothing();
 
@@ -44,20 +38,7 @@ async function seed() {
     console.log("✅ Configuración de suscripción inicializada");
   }
 
-  console.log("✅ Usuarios creados");
-
-  // Categorías
-  await db.insert(categories).values([
-    { name: "Vasos" },
-    { name: "Platos" },
-    { name: "Cubiertos" },
-    { name: "Envases" },
-    { name: "Bolsas" },
-    { name: "Limpieza" },
-    { name: "Varios" },
-  ]).onConflictDoNothing();
-
-  console.log("✅ Categorías creadas");
+  console.log("✅ Usuarios administrativos creados");
 
   // Métodos de pago
   await db.insert(paymentMethods).values([
@@ -76,7 +57,7 @@ async function seed() {
   }).onConflictDoNothing();
   console.log("✅ Porcentaje de precio sugerido inicializado");
 
-  console.log("✅ Sin productos ni gastos fijos de ejemplo — la app arranca limpia");
+  console.log("✅ Sin categorías, productos ni gastos de ejemplo — la app arranca limpia");
 
   console.log("🎉 Seed completado exitosamente.");
   process.exit(0);

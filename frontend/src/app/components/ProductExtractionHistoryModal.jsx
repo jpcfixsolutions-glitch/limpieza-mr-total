@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import api from "../../services/api.js";
 
-const REASONS = { uso_interno: "Uso interno", rotura_dano: "Rotura / Daño", vencimiento: "Vencimiento", donacion: "Donación", otro: "Otro" };
+const REASONS = { uso_interno: "Consumo del local", consumo_local: "Consumo del local", consumo_casa: "Consumo de casa", rotura_dano: "Rotura / Daño", vencimiento: "Vencimiento", donacion: "Donación", otro: "Otro" };
 
 export function ProductExtractionHistoryModal({ from, to, onClose }) {
   const [data, setData] = useState({ rows: [], total: 0 });

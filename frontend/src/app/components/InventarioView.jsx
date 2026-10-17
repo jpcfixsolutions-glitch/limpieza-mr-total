@@ -5,13 +5,13 @@ import { toast } from "sonner";
 import api from "../../services/api.js";
 import { useBarcodeScanner } from "../hooks/useBarcodeScanner.js";
 import { formatStock, hasPackSale, packTypeLabel } from "../../utils/pack.js";
-import { formatCatalogPrice, roundPriceInput } from "../../utils/price.js";
+import { calculatePriceForProfitability, calculateProfitabilityPercent, formatCatalogPrice, roundPriceInput } from "../../utils/price.js";
 import { PaginationBar, paginate, byNameEs } from "./PaginationBar.jsx";
 import { PRODUCT_ICON_OPTIONS } from "../../utils/productIcons.js";
 import { PromotionModal } from "./PromotionModal.jsx";
 import { ProductExtractionModal } from "./ProductExtractionModal.jsx";
 
-const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", cost: "", categoryId: null, priceGroupId: null, stock: "", minStock: "", icon: "Package", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
+const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", cost: "", targetProfitability: "40", categoryId: null, priceGroupId: null, stock: "", minStock: "", icon: "Package", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
 const PRODUCT_DRAFT_STORAGE_KEY = "descartables-yofre:product-draft";
 
 function loadProductDraft() {
@@ -61,11 +61,13 @@ function isRequestTimeout(error) {
 }
 
 function toModalItem(product) {
+  const profitability = calculateProfitabilityPercent(product.cost, product.price);
   return {
     ...product,
     codbarra: product.codbarra || "",
     price: String(product.price),
     cost: String(product.cost ?? ""),
+    targetProfitability: profitability == null ? "" : profitability.toFixed(2),
     stock: String(product.stock),
     minStock: String(product.minStock),
     icon: product.icon || "Package",
@@ -555,7 +557,7 @@ export function InventarioView() {
 
       <div className="bg-surface rounded-xl overflow-hidden border border-foreground/15 shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1180px]">
+          <table className="w-full min-w-[1280px]">
             <thead>
               <tr className="border-b border-foreground/15">
                 <th className="p-4 w-10">
@@ -568,6 +570,7 @@ export function InventarioView() {
                 <th className="text-left text-foreground/80 font-bold p-4 whitespace-nowrap">Proveedor / Colección</th>
                 <th className="text-left text-foreground/80 font-bold p-4">Costo</th>
                 <th className="text-left text-foreground/80 font-bold p-4">Precio</th>
+                <th className="text-left text-foreground/80 font-bold p-4">Rentabilidad</th>
                 <th className="text-left text-foreground/80 font-bold p-4">Stock</th>
                 <th className="text-left text-foreground/80 font-bold p-4 whitespace-nowrap">Min. Stock</th>
                 <th className="text-left text-foreground/80 font-bold p-4">Estado</th>
@@ -576,7 +579,7 @@ export function InventarioView() {
             <tbody>
               {paged.slice.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="p-8 text-center text-foreground/60 font-medium">
+                  <td colSpan={12} className="p-8 text-center text-foreground/60 font-medium">
                     No hay productos para mostrar
                   </td>
                 </tr>
@@ -598,6 +601,7 @@ export function InventarioView() {
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground font-bold">${formatCatalogPrice(row.cost || 0)}</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground font-black">${formatCatalogPrice(row.price)}</span></td>
+                      <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground font-bold">{row.availableQuantity} u.</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
                       <td className="p-3"><span className={`inline-flex items-center justify-center whitespace-nowrap shrink-0 px-2 py-0.5 rounded-full text-[11px] font-bold leading-none ${hasStock ? "bg-success/10 text-success" : "bg-red-500/15 text-red-600"}`}>{hasStock ? "OK" : "Sin stock"}</span></td>
@@ -607,6 +611,7 @@ export function InventarioView() {
                 const product = row;
                 const noStock = product.stock === 0;
                 const lowStock = !noStock && product.stock <= product.minStock;
+                const profitability = calculateProfitabilityPercent(product.cost, product.price);
                 return (
                   <tr key={product.id} className="border-b border-foreground/15 hover:bg-background/50 transition-colors">
                     <td className="p-4">
@@ -660,6 +665,11 @@ export function InventarioView() {
                           {product.priceTiers.map((t) => `x${t.quantity}`).join(" · ")}
                         </span>
                       )}
+                    </td>
+                    <td className="p-4 whitespace-nowrap">
+                      {profitability == null
+                        ? <span className="text-foreground/50 font-medium text-sm">Sin costo</span>
+                        : <span className={`font-black ${profitability >= 40 ? "text-success" : profitability >= 0 ? "text-yellow-700" : "text-red-600"}`}>{profitability.toFixed(2)}%</span>}
                     </td>
                     <td className="p-4 whitespace-nowrap">
                       <span className="text-foreground font-bold">{formatStock(product.stock, product.unitsPerPack, packTypeLabel(product))}</span>
@@ -797,7 +807,7 @@ export function InventarioView() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="text-foreground/80 font-bold text-sm block mb-2">Costo ($)</label>
                   <input
@@ -807,7 +817,10 @@ export function InventarioView() {
                     value={productModal.item.cost}
                     onChange={(e) => {
                       const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
-                      setProductModal((prev) => ({ ...prev, item: { ...prev.item, cost: val } }));
+                      setProductModal((prev) => {
+                        const profitability = calculateProfitabilityPercent(val, prev.item.price);
+                        return { ...prev, item: { ...prev.item, cost: val, targetProfitability: profitability == null ? prev.item.targetProfitability : profitability.toFixed(2) } };
+                      });
                     }}
                     onFocus={(e) => e.target.select()}
                     placeholder="0"
@@ -823,15 +836,41 @@ export function InventarioView() {
                     value={productModal.item.price}
                     onChange={(e) => {
                       const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
-                      setProductModal((prev) => ({ ...prev, item: { ...prev.item, price: val } }));
+                      setProductModal((prev) => {
+                        const profitability = calculateProfitabilityPercent(prev.item.cost, val);
+                        return { ...prev, item: { ...prev.item, price: val, targetProfitability: profitability == null ? prev.item.targetProfitability : profitability.toFixed(2) } };
+                      });
                     }}
-                    onBlur={(e) => setProductModal((prev) => ({ ...prev, item: { ...prev.item, price: roundPriceInput(e.target.value) } }))}
+                    onBlur={(e) => setProductModal((prev) => {
+                      const price = roundPriceInput(e.target.value);
+                      const profitability = calculateProfitabilityPercent(prev.item.cost, price);
+                      return { ...prev, item: { ...prev.item, price, targetProfitability: profitability == null ? prev.item.targetProfitability : profitability.toFixed(2) } };
+                    })}
                     onFocus={(e) => e.target.select()}
                     placeholder="0"
                     className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
                   />
                 </div>
-                <p className="col-span-2 text-foreground/60 font-medium text-xs">
+                <div>
+                  <label className="text-foreground/80 font-bold text-sm block mb-2">Rentabilidad (%)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={productModal.item.targetProfitability ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
+                      setProductModal((prev) => {
+                        const price = calculatePriceForProfitability(prev.item.cost, val);
+                        return { ...prev, item: { ...prev.item, targetProfitability: val, price: Number.isFinite(price) ? String(price) : prev.item.price } };
+                      });
+                    }}
+                    onFocus={(e) => e.target.select()}
+                    placeholder="40"
+                    className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+                  />
+                </div>
+                <p className="sm:col-span-3 text-foreground/60 font-medium text-xs">
                   Los precios de venta se redondean hacia arriba a la próxima decena y se guardan sin centavos. El costo conserva el valor exacto ingresado.
                 </p>
               </div>

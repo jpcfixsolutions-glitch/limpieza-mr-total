@@ -12,7 +12,15 @@ export const StatsController = {
 
   async getRestockCost(req, res) {
     try {
-      res.json(await StatsService.getRestockCost(req.businessUnit));
+      res.json(await StatsService.getRestockCost(req.query, req.businessUnit));
+    } catch (err) {
+      sendControllerError(res, err);
+    }
+  },
+
+  async getTopProducts(req, res) {
+    try {
+      res.json(await StatsService.getTopProducts(req.query, req.businessUnit));
     } catch (err) {
       sendControllerError(res, err);
     }

@@ -292,7 +292,7 @@ export const productExtractions = sqliteTable("product_extractions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
   userName: text("user_name").notNull(),
-  reason: text("reason", { enum: ["uso_interno", "rotura_dano", "vencimiento", "donacion", "otro"] }).notNull(),
+  reason: text("reason", { enum: ["uso_interno", "consumo_local", "consumo_casa", "rotura_dano", "vencimiento", "donacion", "otro"] }).notNull(),
   reasonDetail: text("reason_detail"),
   observations: text("observations"),
   totalCost: real("total_cost").notNull(),

@@ -4,3 +4,4 @@ local.db
 local.db-shm
 local.db-wal
 drizzle/
+*.log

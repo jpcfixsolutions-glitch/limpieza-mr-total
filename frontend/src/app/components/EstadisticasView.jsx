@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
-import { DollarSign, Package, Banknote, CreditCard, TrendingDown, Wallet, RefreshCw, PackageMinus, Unlock, Lock, BookUp, Clock, ChevronDown, ChevronUp, Plus, Eye } from "lucide-react";
+import { DollarSign, Package, Banknote, CreditCard, TrendingDown, Wallet, RefreshCw, PackageMinus, Unlock, Lock, BookUp, Clock, ChevronDown, ChevronUp, Plus, Eye, Trophy } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../services/api.js";
+import { summarizeCatalogProfitability } from "../../utils/price.js";
 import { Loader } from "./Loader.jsx";
 import { DailyExpenseModal } from "./DailyExpenseModal.jsx";
 import { ProductExtractionHistoryModal } from "./ProductExtractionHistoryModal.jsx";
-import { RentabilidadView } from "./RentabilidadView.jsx";
 
 // Formateador de fecha en hora Argentina
 const arFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
@@ -38,7 +38,7 @@ function fmtDDMM(str) {
 const MONTH_NAMES_LONG  = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
 export function EstadisticasView() {
-  const [statsTab, setStatsTab] = useState("summary");
+  const [activePage, setActivePage]       = useState("finances");
   const [period, setPeriod]               = useState("mensual");
   const [cajasCerradas, setCajasCerradas] = useState([]);
   const [gastosFijos, setGastosFijos]     = useState([]);
@@ -47,12 +47,20 @@ export function EstadisticasView() {
   const [loading, setLoading]             = useState(true);
   const [restockCost, setRestockCost]     = useState(0);
   const [activityLog, setActivityLog]     = useState([]);
-  const [cajaStatus, setCajaStatus]       = useState({ isOpen: false, register: null });
-  const [transaccionesCaja, setTransaccionesCaja] = useState([]);
+  const [topProducts, setTopProducts]     = useState([]);
   const [histTab, setHistTab]             = useState("mes"); // "mes" | "semana"
   const [expandedHist, setExpandedHist]   = useState(null);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
-  const [extractionSummary, setExtractionSummary] = useState({ totalCost: 0, operations: 0 });
+  const [extractionSummary, setExtractionSummary] = useState({
+    totalCost: 0,
+    operations: 0,
+    consumption: {
+      totalCost: 0,
+      operations: 0,
+      local: { totalCost: 0, operations: 0 },
+      home: { totalCost: 0, operations: 0 },
+    },
+  });
   const [showExtractionHistory, setShowExtractionHistory] = useState(false);
 
   const LOG_ICONS = { Unlock, Lock, Wallet, BookUp, PackageMinus, Package };
@@ -60,15 +68,17 @@ export function EstadisticasView() {
   const fetchStats = async () => {
     setLoading(true);
     try {
-      const [rCajas, rFijos, rDiarios, rProd, rRestock, rLog, rStatus, rExtractions] = await Promise.allSettled([
+      const periodFrom = period === "semanal" ? getMondayOf(hoyAR()) : period === "mensual" ? `${hoyAR().slice(0, 8)}01` : undefined;
+      const periodTo = hoyAR();
+      const [rCajas, rFijos, rDiarios, rProd, rRestock, rLog, rExtractions, rTopProducts] = await Promise.allSettled([
         api.get("/cash-register/closed"),
         api.get("/fixed-expenses"),
         api.get("/daily-expenses"),
         api.get("/products"),
-        api.get("/stats/restock"),
+        api.get("/stats/restock", { params: { from: periodFrom, to: periodTo } }),
         api.get("/stats/activity-log"),
-        api.get("/cash-register/status"),
-        api.get("/product-extractions/summary", { params: { from: period === "semanal" ? getMondayOf(hoyAR()) : period === "mensual" ? `${hoyAR().slice(0, 8)}01` : undefined, to: hoyAR() } }),
+        api.get("/product-extractions/summary", { params: { from: periodFrom, to: periodTo } }),
+        api.get("/stats/top-products", { params: { from: periodFrom, to: periodTo, limit: 3 } }),
       ]);
       if (rCajas.status   === "fulfilled") setCajasCerradas(rCajas.value.data);
       if (rFijos.status   === "fulfilled") setGastosFijos(rFijos.value.data);
@@ -76,19 +86,8 @@ export function EstadisticasView() {
       if (rProd.status    === "fulfilled") setProductos(rProd.value.data);
       if (rRestock.status === "fulfilled") setRestockCost(rRestock.value.data.restockCost || 0);
       if (rLog.status     === "fulfilled") setActivityLog(rLog.value.data);
-      if (rStatus.status  === "fulfilled") {
-        const status = rStatus.value.data;
-        setCajaStatus(status);
-        if (status.isOpen && status.register) {
-          try {
-            const txRes = await api.get(`/transactions/register/${status.register.id}`);
-            setTransaccionesCaja(txRes.data);
-          } catch { setTransaccionesCaja([]); }
-        } else {
-          setTransaccionesCaja([]);
-        }
-      }
       if (rExtractions.status === "fulfilled") setExtractionSummary(rExtractions.value.data);
+      if (rTopProducts.status === "fulfilled") setTopProducts(rTopProducts.value.data);
     } finally {
       setLoading(false);
     }
@@ -108,10 +107,6 @@ export function EstadisticasView() {
     }
   };
 
-  if (statsTab === "profitability") {
-    return <RentabilidadView onSelectOverview={() => setStatsTab("summary")} />;
-  }
-
   // ── Cutoffs de período ────────────────────────────────────────────────────
   const today        = hoyAR();                          // "YYYY-MM-DD"
   const semanaInicio = getMondayOf(today);               // lunes de esta semana
@@ -124,6 +119,11 @@ export function EstadisticasView() {
   const cajasFiltradas = cajasCerradas.filter((c) => {
     if (!c.closedAt) return false;
     return periodCutoff ? c.closedAt.slice(0, 10) >= periodCutoff : true;
+  });
+
+  const activityLogFiltrado = activityLog.filter((log) => {
+    if (!log.date) return false;
+    return periodCutoff ? log.date.slice(0, 10) >= periodCutoff : true;
   });
 
   // ── Tarjetas principales ──────────────────────────────────────────────────
@@ -141,29 +141,17 @@ export function EstadisticasView() {
   const totalDiarios         = gastosDiariosFiltrados.reduce((s, g) => s + (Number(g.amount) || 0), 0);
   const totalGastosOperativos = totalFijos + totalDiarios;
   const invertidoStock       = productos.reduce((s, p) => s + ((Number(p.cost)||0) * (Number(p.stock)||0)), 0);
+  const profitabilitySummary = summarizeCatalogProfitability(productos);
 
   const gastosDiariosEfectivo = gastosDiariosFiltrados.filter((g) => g.method === "efectivo").reduce((s,g)=>s+(Number(g.amount)||0),0);
   const gastosDiariosVirtual  = gastosDiariosFiltrados.filter((g) => g.method === "transferencia").reduce((s,g)=>s+(Number(g.amount)||0),0);
   const disponibleEfectivo    = efectivo - gastosDiariosEfectivo;
   const disponibleVirtual     = virtual  - gastosDiariosVirtual;
 
-  // ── Caja final del día ────────────────────────────────────────────────────
-  const { cajaFinalDelDia, fondoInicialCaja, efectivoVentasCaja, extraccionesEfectivoCaja, hayCajaHoy } = (() => {
-    if (!cajaStatus.isOpen || !cajaStatus.register)
-      return { cajaFinalDelDia:0, fondoInicialCaja:0, efectivoVentasCaja:0, extraccionesEfectivoCaja:0, hayCajaHoy:false };
-    const fondoInicial    = Number(cajaStatus.register.initialCash) || 0;
-    const efectivoVentas  = transaccionesCaja.reduce((s, t) =>
-      s + (t.payments||[]).filter((p)=>(p.methodName||"").toLowerCase().includes("efectivo")).reduce((a,p)=>a+(Number(p.amount)||0),0), 0);
-    const extracciones    = gastosDiarios
-      .filter((g) => g.registerId === cajaStatus.register.id && g.method === "efectivo")
-      .reduce((s,g)=>s+(Number(g.amount)||0),0);
-    return { cajaFinalDelDia: fondoInicial + efectivoVentas - extracciones, fondoInicialCaja: fondoInicial, efectivoVentasCaja: efectivoVentas, extraccionesEfectivoCaja: extracciones, hayCajaHoy: true };
-  })();
-
   // ── Historial por mes ─────────────────────────────────────────────────────
   const historicoPorMes = (() => {
     const map = {};
-    cajasCerradas.forEach((c) => {
+    cajasFiltradas.forEach((c) => {
       if (!c.closedAt) return;
       const k = c.closedAt.slice(0, 7);
       if (!map[k]) map[k] = { ingresos:0, efectivo:0, virtual:0, cajas:0 };
@@ -183,7 +171,7 @@ export function EstadisticasView() {
   // ── Historial por semana ──────────────────────────────────────────────────
   const historicoPorSemana = (() => {
     const map = {};
-    cajasCerradas.forEach((c) => {
+    cajasFiltradas.forEach((c) => {
       if (!c.closedAt) return;
       const monday = getMondayOf(c.closedAt.slice(0,10));
       if (!map[monday]) map[monday] = { ingresos:0, efectivo:0, virtual:0, cajas:0 };
@@ -201,10 +189,16 @@ export function EstadisticasView() {
   })();
 
   // ── Misc ──────────────────────────────────────────────────────────────────
-  const balanceNeto     = revenue - totalGastosOperativos;
+  const totalEgresosBalance = totalDiarios + totalFijos + restockCost;
+  const balanceNeto     = revenue - totalEgresosBalance;
   const margenPorcentaje = revenue > 0 ? (balanceNeto / revenue) * 100 : 0;
   const monto = (value, cls = "") => <span className={cls}>${value}</span>;
   const PERIOD_LABELS   = { todo:"Todo", mensual:"Mensual", semanal:"Semanal" };
+  const PAGE_LABELS = {
+    finances: { title: "Finanzas", description: "Ingresos, gastos, restock y balance" },
+    profitability: { title: "Rentabilidad", description: "Rendimiento del catálogo y productos estrella" },
+    history: { title: "Historial", description: "Movimientos y resultados por período" },
+  };
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -214,18 +208,26 @@ export function EstadisticasView() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6 md:mb-8 gap-3">
         <div>
-          <h1 className="text-foreground font-bold text-2xl md:text-4xl mb-1 md:mb-2">Estadísticas</h1>
-          <p className="text-foreground/80 font-medium text-sm">Rendimiento y métricas de tu local</p>
+          <h1 className="text-foreground font-bold text-2xl md:text-4xl mb-1 md:mb-2">{PAGE_LABELS[activePage].title}</h1>
+          <p className="text-foreground/80 font-medium text-sm">{PAGE_LABELS[activePage].description}</p>
         </div>
         <div className="flex items-center gap-3 self-start sm:self-auto flex-wrap">
-          <div className="bg-surface p-1 rounded-xl border border-foreground/15 shadow-sm flex gap-1">
-            <button onClick={() => setStatsTab("summary")} className="px-4 py-2 rounded-lg text-sm font-bold bg-secondary text-foreground">Resumen</button>
-            <button onClick={() => setStatsTab("profitability")} className="px-4 py-2 rounded-lg text-sm font-bold text-foreground/70 hover:text-foreground">Rentabilidad</button>
+          <div className="bg-surface p-1 rounded-xl border border-foreground/15 shadow-sm flex gap-1 overflow-x-auto max-w-full">
+            {[
+              ["finances", "Finanzas"],
+              ["profitability", "Rentabilidad"],
+              ["history", "Historial"],
+            ].map(([id, label]) => (
+              <button key={id} onClick={() => setActivePage(id)}
+                className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${activePage === id ? "bg-secondary text-foreground shadow-sm" : "text-foreground/70 hover:text-foreground"}`}>
+                {label}
+              </button>
+            ))}
           </div>
-          <div className="bg-surface p-1 rounded-xl border border-foreground/15 shadow-sm flex gap-1">
-            {["todo","mensual","semanal"].map((p) => (
+          <div className="bg-surface p-1 rounded-xl border border-foreground/15 shadow-sm flex gap-1 overflow-x-auto max-w-full">
+            {["semanal","mensual","todo"].map((p) => (
               <button key={p} onClick={() => setPeriod(p)}
-                className={`px-4 md:px-6 py-2 rounded-lg text-sm font-bold transition-all shadow-sm ${period === p ? "bg-secondary text-foreground" : "bg-transparent text-foreground/70 hover:text-foreground"}`}>
+                className={`px-4 md:px-6 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all shadow-sm ${period === p ? "bg-secondary text-foreground" : "bg-transparent text-foreground/70 hover:text-foreground"}`}>
                 {PERIOD_LABELS[p]}
               </button>
             ))}
@@ -233,46 +235,71 @@ export function EstadisticasView() {
         </div>
       </div>
 
-      {/* Tarjetas stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6 mb-8">
-        <div className="bg-surface rounded-xl p-6 border border-foreground/15 shadow-sm">
+      {/* Tarjetas de finanzas y rentabilidad */}
+      {activePage !== "history" && <div className={`grid grid-cols-1 gap-6 mb-8 ${activePage === "finances" ? "md:grid-cols-2 xl:grid-cols-4" : "lg:grid-cols-3"}`}>
+        {activePage === "finances" && <>
+        <div className="bg-surface rounded-xl p-6 border border-success/30 shadow-sm md:col-span-2">
           <div className="flex items-center gap-3 mb-4 text-success"><DollarSign size={20}/><h3 className="text-foreground/80 font-bold">Ingresos Totales</h3></div>
           <p className="text-3xl font-black">{monto(revenue.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-foreground")}</p>
-        </div>
-        <div className="bg-surface rounded-xl p-6 border border-foreground/15 shadow-sm">
-          <div className="flex items-center gap-3 mb-4 text-success"><Banknote size={20}/><h3 className="text-foreground/80 font-bold">En Efectivo</h3></div>
-          <p className="text-3xl font-black">{monto(efectivo.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-foreground")}</p>
-          <p className="text-foreground/60 font-medium text-sm mt-2">{revenue>0?((efectivo/revenue)*100).toFixed(1):0}% del total</p>
-        </div>
-        <div className="bg-surface rounded-xl p-6 border border-primary/30 shadow-sm">
-          <div className="flex items-center gap-3 mb-4 text-primary"><CreditCard size={20}/><h3 className="text-foreground/80 font-bold">Virtual</h3></div>
-          <p className="text-3xl font-black">{monto(virtual.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-primary")}</p>
-          <p className="text-primary/60 font-medium text-sm mt-2">Tarjetas, transferencias y QR</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-5 pt-4 border-t border-foreground/15">
+            <div className="rounded-xl bg-background p-4 border border-foreground/10">
+              <div className="flex items-center gap-2 text-success"><Banknote size={18}/><span className="text-sm font-bold">Efectivo</span></div>
+              <p className="text-xl font-black mt-2">{monto(efectivo.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}))}</p>
+              <p className="text-foreground/55 text-xs font-medium mt-1">{revenue>0?((efectivo/revenue)*100).toFixed(1):0}% del total</p>
+            </div>
+            <div className="rounded-xl bg-background p-4 border border-foreground/10">
+              <div className="flex items-center gap-2 text-primary"><CreditCard size={18}/><span className="text-sm font-bold">Virtual</span></div>
+              <p className="text-xl font-black mt-2">{monto(virtual.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}))}</p>
+              <p className="text-foreground/55 text-xs font-medium mt-1">Tarjetas, transferencias y QR</p>
+            </div>
+          </div>
         </div>
         <div className="bg-surface rounded-xl p-6 border border-foreground/15 shadow-sm">
           <div className="flex items-center gap-3 mb-4 text-foreground"><RefreshCw size={20}/><h3 className="text-foreground/80 font-bold">Gasto de Restock</h3></div>
           <p className="text-3xl font-black">{monto(restockCost.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-foreground")}</p>
           <p className="text-foreground/60 font-medium text-sm mt-2">Costo para reponer lo vendido</p>
         </div>
-        <div className="bg-surface rounded-xl p-6 border border-success/30 shadow-sm">
-          <div className="flex items-center gap-3 mb-4 text-success"><Wallet size={20}/><h3 className="text-foreground/80 font-bold">Caja final del día</h3></div>
-          <p className="text-3xl font-black">{monto(cajaFinalDelDia.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-success")}</p>
-          <p className="text-foreground/60 font-medium text-sm mt-2">
-            {hayCajaHoy
-              ? `Fondo $${fondoInicialCaja.toFixed(2)} + ventas $${efectivoVentasCaja.toFixed(2)}${extraccionesEfectivoCaja>0?` − $${extraccionesEfectivoCaja.toFixed(2)}`:""}` 
-              : "Abrí la caja para ver el total"}
-          </p>
-        </div>
         <div className="bg-surface rounded-xl p-6 border border-orange-400/30 shadow-sm">
-          <div className="flex items-center justify-between gap-3 mb-4 text-orange-600"><div className="flex items-center gap-3"><PackageMinus size={20}/><h3 className="text-foreground/80 font-bold">Valor de productos extraídos</h3></div><button onClick={() => setShowExtractionHistory(true)} title="Ver detalle" className="p-2 rounded-lg hover:bg-surface"><Eye size={18}/></button></div>
-          <p className="text-3xl font-black">{monto(Number(extractionSummary.totalCost || 0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-foreground")}</p>
-          <p className="text-foreground/60 font-medium text-sm mt-2">{extractionSummary.operations || 0} operación{extractionSummary.operations === 1 ? "" : "es"} en el período</p>
+          <div className="flex items-center justify-between gap-3 mb-4 text-orange-600"><div className="flex items-center gap-3"><PackageMinus size={20}/><h3 className="text-foreground/80 font-bold">Consumo de mercadería</h3></div><button onClick={() => setShowExtractionHistory(true)} title="Ver detalle" className="p-2 rounded-lg hover:bg-surface"><Eye size={18}/></button></div>
+          <p className="text-3xl font-black">{monto(Number(extractionSummary.consumption?.totalCost || 0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-foreground")}</p>
+          <p className="text-foreground/60 font-medium text-sm mt-2">{extractionSummary.consumption?.operations || 0} operación{extractionSummary.consumption?.operations === 1 ? "" : "es"} de consumo en el período</p>
+          <div className="border-t border-foreground/15 mt-4 pt-3 space-y-2 text-sm">
+            <div className="flex justify-between gap-3"><span className="text-foreground/70 font-medium">Consumo del local</span><span className="font-bold">${Number(extractionSummary.consumption?.local?.totalCost || 0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+            <div className="flex justify-between gap-3"><span className="text-foreground/70 font-medium">Consumo de casa</span><span className="font-bold">${Number(extractionSummary.consumption?.home?.totalCost || 0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+            <div className="flex justify-between gap-3 text-xs"><span className="text-foreground/55 font-medium">Todas las extracciones</span><span className="text-foreground/70 font-bold">${Number(extractionSummary.totalCost || 0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+          </div>
         </div>
-      </div>
+        </>}
+        {activePage === "profitability" && <>
+        <div className="bg-surface rounded-xl p-6 border border-primary/30 shadow-sm lg:col-span-2">
+          <div className="flex items-center gap-3 mb-4 text-primary"><Trophy size={20}/><h3 className="text-foreground/80 font-bold">Productos estrella</h3></div>
+          {topProducts.length === 0 ? <p className="text-foreground/60 font-medium text-sm">No hay ventas en este período.</p> : (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {topProducts.map((product, index) => (
+                <div key={product.productId || product.productName} className="rounded-xl bg-background border border-foreground/10 p-4 flex items-center gap-3">
+                  <span className={`w-9 h-9 shrink-0 rounded-full flex items-center justify-center font-black ${index === 0 ? "bg-primary text-foreground" : "bg-surface text-foreground/70"}`}>{index + 1}</span>
+                  <div className="min-w-0"><p className="font-bold text-foreground truncate" title={product.productName}>{product.productName}</p><p className="text-xs text-foreground/60 font-medium">{product.quantitySold} unidad{product.quantitySold === 1 ? "" : "es"} vendida{product.quantitySold === 1 ? "" : "s"}</p></div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="bg-surface rounded-xl p-6 border border-success/30 shadow-sm lg:col-span-3">
+          <div className="flex items-center gap-3 mb-4 text-success"><TrendingDown className="rotate-180" size={20}/><h3 className="text-foreground/80 font-bold">Rentabilidad del catálogo</h3></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div className="rounded-xl bg-background border border-foreground/10 p-4"><p className="text-xs text-foreground/60 font-bold uppercase tracking-wide">Cantidad de productos</p><p className="text-xl font-black mt-2">{profitabilitySummary.productCount.toLocaleString("es-AR")}</p></div>
+            <div className="rounded-xl bg-background border border-foreground/10 p-4"><p className="text-xs text-foreground/60 font-bold uppercase tracking-wide">Capital invertido</p><p className="text-xl font-black mt-2">${profitabilitySummary.capitalInvested.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</p></div>
+            <div className="rounded-xl bg-background border border-foreground/10 p-4"><p className="text-xs text-foreground/60 font-bold uppercase tracking-wide">Promedio de rentabilidad</p><p className={`text-xl font-black mt-2 ${profitabilitySummary.averageProfitability == null ? "text-foreground" : profitabilitySummary.averageProfitability >= 40 ? "text-success" : "text-yellow-700"}`}>{profitabilitySummary.averageProfitability == null ? "No calculable" : `${profitabilitySummary.averageProfitability.toFixed(2)}%`}</p></div>
+            <div className="rounded-xl bg-background border border-foreground/10 p-4"><p className="text-xs text-foreground/60 font-bold uppercase tracking-wide">Objetivo de rentabilidad</p><p className="text-xl font-black mt-2">40.00%</p></div>
+          </div>
+        </div>
+        </>}
+      </div>}
 
       {/* Balance Financiero */}
+      {activePage === "finances" && <>
       <h2 className="text-primary font-bold text-2xl mb-6 mt-4">Balance Financiero</h2>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 mb-12">
         <div className="bg-surface rounded-xl p-6 border border-foreground/15 shadow-sm">
           <div className="flex items-center gap-3 mb-4 text-primary"><Package size={20}/><h3 className="text-foreground/80 font-bold">Invertido en Stock</h3></div>
           <p className="text-3xl font-black">{monto(invertidoStock.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-foreground")}</p>
@@ -328,7 +355,7 @@ export function EstadisticasView() {
             </div>
           </div>
         </div>
-        <div className={`rounded-xl p-6 border flex flex-col shadow-sm ${balanceNeto>=0?"bg-surface border-success/30":"bg-surface border-red-400/30"}`}>
+        <div className={`rounded-xl p-6 border flex flex-col shadow-sm lg:col-span-2 xl:col-span-1 ${balanceNeto>=0?"bg-surface border-success/30":"bg-surface border-red-400/30"}`}>
           <div className={`flex items-center gap-3 mb-2 ${balanceNeto>=0?"text-success":"text-foreground"}`}>
             <Wallet size={20}/><h3 className="font-bold">Balance Neto</h3>
           </div>
@@ -338,7 +365,17 @@ export function EstadisticasView() {
           <p className={`text-sm mt-1 mb-4 font-bold ${balanceNeto>=0?"text-success/70":"text-foreground/70"}`}>
             Rentabilidad: {margenPorcentaje.toFixed(1)}%
           </p>
-          <div className={`border-t pt-4 mt-auto space-y-2 ${balanceNeto>=0?"border-success/20":"border-primary/20"}`}>
+          <div className={`border-t pt-4 space-y-2 ${balanceNeto>=0?"border-success/20":"border-primary/20"}`}>
+            <p className="text-xs text-foreground/70 uppercase tracking-wider font-bold mb-1">Se calcula teniendo en cuenta</p>
+            <ul className="space-y-1 text-sm text-foreground/80 font-medium">
+              <li><span className="text-success font-black mr-2">+</span>Ingresos brutos</li>
+              <li><span className="text-red-500 font-black mr-2">−</span>Gastos y extracciones operativas</li>
+              <li><span className="text-red-500 font-black mr-2">−</span>Gastos fijos</li>
+              <li><span className="text-red-500 font-black mr-2">−</span>Gasto de restock</li>
+            </ul>
+            <p className="text-xs text-foreground/55 font-medium pt-1">Los gastos operativos incluyen las extracciones registradas.</p>
+          </div>
+          <div className={`border-t pt-4 mt-4 space-y-2 ${balanceNeto>=0?"border-success/20":"border-primary/20"}`}>
             <p className="text-xs text-foreground/70 uppercase tracking-wider font-bold mb-1">Liquidez Disponible</p>
             <div className="flex justify-between items-center text-sm">
               <span className="text-foreground font-medium">En Efectivo</span>
@@ -351,6 +388,7 @@ export function EstadisticasView() {
           </div>
         </div>
       </div>
+      </>}
 
       {showExpenseModal && (
         <DailyExpenseModal
@@ -360,6 +398,7 @@ export function EstadisticasView() {
       )}
       {showExtractionHistory && <ProductExtractionHistoryModal from={period === "semanal" ? semanaInicio : period === "mensual" ? mesInicio : ""} to={today} onClose={() => setShowExtractionHistory(false)} />}
 
+      {activePage === "history" && <>
       {/* Movimientos */}
       <div className="mb-12">
         <div className="bg-surface rounded-xl border border-foreground/15 p-6 flex flex-col shadow-sm">
@@ -368,9 +407,9 @@ export function EstadisticasView() {
             <h2 className="text-primary text-xl font-bold">Historial de Movimientos</h2>
           </div>
           <div className="flex-1 overflow-y-auto max-h-[300px] pr-2 space-y-3 custom-scrollbar">
-            {activityLog.length === 0 ? (
+            {activityLogFiltrado.length === 0 ? (
               <p className="text-foreground/60 font-medium text-sm">No hay movimientos registrados</p>
-            ) : activityLog.map((log) => {
+            ) : activityLogFiltrado.map((log) => {
               const Icon = LOG_ICONS[log.icon] || Clock;
               return (
                 <div key={log.id} className="bg-background rounded-lg p-3 border border-foreground/15 shadow-sm flex items-start gap-3">
@@ -476,6 +515,7 @@ export function EstadisticasView() {
           </table>
         </div>
       </div>
+      </>}
     </div>
   );
 }

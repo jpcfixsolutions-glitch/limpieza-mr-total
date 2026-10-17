@@ -1,5 +1,5 @@
 import { db } from "../db/client.js";
-import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import {
   products,
   cashRegisters,
@@ -10,7 +10,8 @@ import {
   dailyExpenses,
   stockModifications,
   internalWithdrawals,
-  businessUnitProducts,
+  productExtractions,
+  productExtractionItems,
   inventoryMovements,
 } from "../db/schema.js";
 import { calculateProfitability } from "./profitability.js";
@@ -58,21 +59,56 @@ export const StatsService = {
     return calculateProfitability(items);
   },
 
-  async getRestockCost(businessUnit = null) {
-    if (businessUnit?.id) {
-      const rows = await db.select().from(businessUnitProducts)
-        .where(eq(businessUnitProducts.businessUnitId, businessUnit.id));
-      return { restockCost: rows.reduce((sum, p) => p.stock < p.minStock ? sum + (p.minStock - p.stock) * p.cost : sum, 0) };
-    }
-    const allProducts = await ProductModel.findAll();
-    const restockCost = allProducts.reduce((sum, p) => {
-      if (p.stock < p.minStock) {
-        const needed = p.minStock - p.stock;
-        return sum + needed * p.cost;
+  async getRestockCost({ from, to } = {}, businessUnit = null) {
+    const profitability = await StatsService.getProfitability({ from, to }, businessUnit);
+    return { restockCost: Number(profitability.summary.totalCost || 0) };
+  },
+
+  async getTopProducts({ from, to, limit = 3 } = {}, businessUnit = null) {
+    const conditions = [eq(transactions.status, "completed")];
+    if (from) conditions.push(gte(transactions.createdAt, `${from} 00:00:00`));
+    if (to) conditions.push(lte(transactions.createdAt, `${to} 23:59:59`));
+    if (businessUnit?.id) conditions.push(eq(transactions.businessUnitId, businessUnit.id));
+
+    const items = await db.select({
+      productId: transactionItems.productId,
+      productName: transactionItems.productName,
+      quantity: transactionItems.quantity,
+      packSize: transactionItems.packSize,
+      promotionComposition: transactionItems.promotionComposition,
+    }).from(transactionItems)
+      .innerJoin(transactions, eq(transactionItems.transactionId, transactions.id))
+      .where(and(...conditions));
+
+    const totals = new Map();
+    const addUnits = (productId, productName, quantity) => {
+      const units = Number(quantity) || 0;
+      if (units <= 0) return;
+      const key = productId != null ? `product-${productId}` : `name-${productName}`;
+      const current = totals.get(key) || { productId: productId || null, productName: productName || "Producto", quantitySold: 0 };
+      current.quantitySold += units;
+      totals.set(key, current);
+    };
+
+    for (const item of items) {
+      if (item.promotionComposition) {
+        try {
+          const composition = JSON.parse(item.promotionComposition);
+          for (const component of Array.isArray(composition) ? composition : []) {
+            addUnits(component.productId, component.name, Number(component.quantity) * Number(item.quantity));
+          }
+        } catch {
+          // Una composición histórica inválida no debe impedir el resto del ranking.
+        }
+      } else {
+        addUnits(item.productId, item.productName, Number(item.quantity) * Number(item.packSize || 1));
       }
-      return sum;
-    }, 0);
-    return { restockCost };
+    }
+
+    const safeLimit = Math.min(10, Math.max(1, Number(limit) || 3));
+    return [...totals.values()]
+      .sort((a, b) => b.quantitySold - a.quantitySold || a.productName.localeCompare(b.productName, "es"))
+      .slice(0, safeLimit);
   },
 
   async getActivityLog(businessUnit = null) {
@@ -171,6 +207,39 @@ export const StatsService = {
         type: "Retiro interno",
         details: `${w.productName}: ${w.quantity} unidad${w.quantity !== 1 ? "es" : ""} retirada${w.quantity !== 1 ? "s" : ""} para uso del local`,
         date: w.createdAt,
+        icon: "PackageMinus",
+        color: "text-orange-500",
+        bg: "bg-orange-50",
+      });
+    }
+
+    // Consumos registrados con costo histórico en el flujo unificado de extracciones.
+    const consumptions = await db
+      .select()
+      .from(productExtractions)
+      .where(inArray(productExtractions.reason, ["uso_interno", "consumo_local", "consumo_casa"]))
+      .orderBy(desc(productExtractions.createdAt))
+      .limit(100);
+    const consumptionIds = consumptions.map((consumption) => consumption.id);
+    const consumptionItems = consumptionIds.length
+      ? await db.select().from(productExtractionItems).where(inArray(productExtractionItems.extractionId, consumptionIds))
+      : [];
+    const itemsByConsumption = new Map();
+    for (const item of consumptionItems) {
+      const items = itemsByConsumption.get(item.extractionId) || [];
+      items.push(item);
+      itemsByConsumption.set(item.extractionId, items);
+    }
+    for (const consumption of consumptions) {
+      const destination = consumption.reason === "consumo_casa" ? "Consumo de casa" : "Consumo del local";
+      const itemSummary = (itemsByConsumption.get(consumption.id) || [])
+        .map((item) => `${item.quantity}x ${item.productName}`)
+        .join(", ");
+      logs.push({
+        id: `extraction-${consumption.id}`,
+        type: destination,
+        details: `${itemSummary || `${consumption.totalUnits} unidad${consumption.totalUnits !== 1 ? "es" : ""}`} — valor a costo $${Number(consumption.totalCost).toFixed(2)}`,
+        date: consumption.createdAt,
         icon: "PackageMinus",
         color: "text-orange-500",
         bg: "bg-orange-50",

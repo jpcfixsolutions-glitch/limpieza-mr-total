@@ -15,3 +15,31 @@ export function formatCatalogPrice(value) {
   const rounded = roundPriceUpToTen(value);
   return Number.isFinite(rounded) ? rounded.toFixed(0) : "0";
 }
+
+export function calculateProfitabilityPercent(cost, price) {
+  if (cost === "" || cost === null || cost === undefined || price === "" || price === null || price === undefined) return null;
+  const numericCost = Number(cost);
+  const numericPrice = Number(price);
+  if (!Number.isFinite(numericCost) || numericCost <= 0 || !Number.isFinite(numericPrice)) return null;
+  return ((numericPrice - numericCost) / numericCost) * 100;
+}
+
+export function calculatePriceForProfitability(cost, percentage) {
+  if (cost === "" || cost === null || cost === undefined || percentage === "" || percentage === null || percentage === undefined) return Number.NaN;
+  const numericCost = Number(cost);
+  const numericPercentage = Number(percentage);
+  if (!Number.isFinite(numericCost) || numericCost <= 0 || !Number.isFinite(numericPercentage) || numericPercentage < 0) return Number.NaN;
+  return roundPriceUpToTen(numericCost * (1 + numericPercentage / 100));
+}
+
+export function summarizeCatalogProfitability(products = []) {
+  const localProducts = products.filter((product) => product.isAvailable !== false && product.inventoryConfigured !== false);
+  const capitalInvested = localProducts.reduce((total, product) => total + (Number(product.cost) || 0) * (Number(product.stock) || 0), 0);
+  const profitabilityValues = localProducts
+    .map((product) => calculateProfitabilityPercent(product.cost, product.price))
+    .filter((value) => value != null);
+  const averageProfitability = profitabilityValues.length
+    ? profitabilityValues.reduce((total, value) => total + value, 0) / profitabilityValues.length
+    : null;
+  return { productCount: localProducts.length, capitalInvested, averageProfitability };
+}

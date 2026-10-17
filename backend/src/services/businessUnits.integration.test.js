@@ -166,8 +166,15 @@ test("flujos multiunidad, idempotencia, reversiones y concurrencia", async (t) =
     const warehouseStats = await WarehouseService.stats(warehouse);
     const localProfitability = await StatsService.getProfitability({}, local);
     const warehouseProfitability = await StatsService.getProfitability({}, warehouse);
+    const localRestock = await StatsService.getRestockCost({}, local);
+    const futureRestock = await StatsService.getRestockCost({ from: "2099-01-01", to: "2099-12-31" }, local);
+    const topProducts = await StatsService.getTopProducts({}, local);
     assert.ok(localProfitability.summary.netRevenue > 0);
     assert.equal(warehouseProfitability.summary.netRevenue, 0);
+    assert.equal(localRestock.restockCost, localProfitability.summary.totalCost);
+    assert.ok(localRestock.restockCost > 0);
+    assert.equal(futureRestock.restockCost, 0);
+    assert.deepEqual(topProducts.map((product) => [product.productName, product.quantitySold]), [["Producto propio", 9], ["Producto directo", 4]]);
     assert.equal(warehouseStats.stockUnits, (await stock(2, 1)) + (await stock(2, 2)));
   });
 });

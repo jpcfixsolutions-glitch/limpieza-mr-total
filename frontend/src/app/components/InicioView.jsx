@@ -17,6 +17,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [withdrawProductId, setWithdrawProductId] = useState("");
   const [withdrawQty, setWithdrawQty] = useState("");
+  const [withdrawDestination, setWithdrawDestination] = useState("");
   const [submittingWithdraw, setSubmittingWithdraw] = useState(false);
   const [searchWithdraw, setSearchWithdraw] = useState("");
   const [loading, setLoading] = useState(true);
@@ -132,14 +133,19 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
 
   const handleWithdraw = async (e) => {
     e.preventDefault();
-    if (!withdrawProductId || !withdrawQty || withdrawQty <= 0) return;
+    const quantity = Number(withdrawQty);
+    if (!withdrawProductId || !Number.isInteger(quantity) || quantity <= 0 || !withdrawDestination) return;
     setSubmittingWithdraw(true);
     try {
-      await api.post("/internal-withdrawals", { productId: Number(withdrawProductId), quantity: Number(withdrawQty) });
+      await api.post("/product-extractions", {
+        items: [{ productId: Number(withdrawProductId), quantity }],
+        reason: withdrawDestination,
+      });
       toast.success("Mercadería retirada correctamente");
       setShowWithdrawModal(false);
       setWithdrawProductId("");
       setWithdrawQty("");
+      setWithdrawDestination("");
       setSearchWithdraw("");
       const [rLog, rProd] = await Promise.allSettled([api.get("/stats/activity-log"), api.get("/products")]);
       if (rLog.status === "fulfilled") setSystemLog(rLog.value.data);
@@ -324,10 +330,10 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
           <div className="bg-background rounded-2xl w-full max-w-md border border-surface shadow-2xl">
             <div className="p-6 border-b border-surface flex items-center justify-between">
               <h2 className="text-primary font-bold text-2xl flex items-center gap-2"><PackageMinus size={24} className="text-primary" /> Retirar Uso Interno</h2>
-              <button onClick={() => { setShowWithdrawModal(false); setSearchWithdraw(""); setWithdrawQty(""); }} className="text-foreground/60 hover:text-foreground transition-colors"><X size={24} /></button>
+              <button onClick={() => { setShowWithdrawModal(false); setSearchWithdraw(""); setWithdrawQty(""); setWithdrawDestination(""); }} className="text-foreground/60 hover:text-foreground transition-colors"><X size={24} /></button>
             </div>
             <form onSubmit={handleWithdraw} className="p-6 space-y-4">
-              <p className="text-foreground/80 font-medium text-sm mb-4">Seleccioná el producto y la cantidad a retirar para uso del local. Se descuenta en unidades del stock y queda registrado en el historial.</p>
+              <p className="text-foreground/80 font-medium text-sm mb-4">Seleccioná el producto, la cantidad y el destino del consumo. Se descuenta en unidades del stock y queda registrado en el historial.</p>
               <div>
                 <label className="text-foreground/80 font-bold text-sm block mb-2">Producto</label>
                 <input
@@ -363,9 +369,31 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
                   required
                 />
               </div>
+              <fieldset>
+                <legend className="text-foreground/80 font-bold text-sm block mb-2">Destino del consumo</legend>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {[
+                    ["consumo_local", "Consumo del local"],
+                    ["consumo_casa", "Consumo de casa"],
+                  ].map(([value, label]) => (
+                    <label key={value} className={`flex items-center gap-3 rounded-xl border p-3 cursor-pointer transition-colors ${withdrawDestination === value ? "border-primary bg-primary/10" : "border-foreground/15 bg-surface hover:border-primary/50"}`}>
+                      <input
+                        type="radio"
+                        name="withdrawDestination"
+                        value={value}
+                        checked={withdrawDestination === value}
+                        onChange={(e) => setWithdrawDestination(e.target.value)}
+                        className="accent-primary"
+                        required
+                      />
+                      <span className="text-foreground font-bold text-sm">{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
               <div className="pt-4 flex gap-4">
-                <button type="button" onClick={() => { setShowWithdrawModal(false); setSearchWithdraw(""); setWithdrawQty(""); }} className="flex-1 bg-surface hover:bg-surface text-foreground font-bold py-4 rounded-xl transition-all shadow-sm">Cancelar</button>
-                <button type="submit" disabled={submittingWithdraw || !withdrawProductId || !withdrawQty} className="flex-1 bg-secondary hover:brightness-125 disabled:bg-surface disabled:text-foreground/50 text-foreground font-bold py-4 rounded-xl transition-all shadow-md">{submittingWithdraw ? "Retirando..." : "Confirmar Retiro"}</button>
+                <button type="button" onClick={() => { setShowWithdrawModal(false); setSearchWithdraw(""); setWithdrawQty(""); setWithdrawDestination(""); }} className="flex-1 bg-surface hover:bg-surface text-foreground font-bold py-4 rounded-xl transition-all shadow-sm">Cancelar</button>
+                <button type="submit" disabled={submittingWithdraw || !withdrawProductId || !Number.isInteger(Number(withdrawQty)) || Number(withdrawQty) <= 0 || !withdrawDestination} className="flex-1 bg-secondary hover:brightness-125 disabled:bg-surface disabled:text-foreground/50 text-foreground font-bold py-4 rounded-xl transition-all shadow-md">{submittingWithdraw ? "Retirando..." : "Confirmar Retiro"}</button>
               </div>
             </form>
           </div>

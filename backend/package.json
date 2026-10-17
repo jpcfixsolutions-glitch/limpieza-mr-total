@@ -12,6 +12,8 @@
     "db:restore-costs": "node src/db/patches/restore-product-costs-from-excel.js",
     "db:seed": "node src/db/seed.js",
     "db:reset": "node src/db/reset.js",
+    "db:prepare-client": "node src/db/reset.js",
+    "db:import-products": "node src/db/import-products-from-xlsx.js",
     "db:patch-codbarra": "node src/db/patches/add-codbarra.js",
     "db:studio": "drizzle-kit studio"
   },
