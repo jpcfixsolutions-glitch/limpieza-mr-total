@@ -79,6 +79,25 @@ export function LoginView({ onLogin }) {
           </button>
         </form>
 
+        <div className="mt-8 pt-6 border-t border-foreground/15">
+          <p className="text-foreground/60 font-medium text-sm text-center mb-4">Acceso rápido:</p>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => { setUsername("admin"); setPassword("mrtotal333"); }}
+              className="flex-1 bg-background hover:bg-primary/10 text-foreground font-bold py-2 rounded-lg text-sm transition-colors border border-foreground/15 shadow-sm"
+            >
+              Llenar Admin
+            </button>
+            <button
+              type="button"
+              onClick={() => { setUsername("cajero"); setPassword("caja123"); }}
+              className="flex-1 bg-background hover:bg-primary/10 text-foreground font-bold py-2 rounded-lg text-sm transition-colors border border-foreground/15 shadow-sm"
+            >
+              Llenar Cajero
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

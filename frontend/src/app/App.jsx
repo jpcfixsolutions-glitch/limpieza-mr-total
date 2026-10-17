@@ -70,9 +70,20 @@ export default function App() {
             id: String(t.id),
             date: t.date,
             time: t.time,
-            total: t.total,
-            payments: (t.payments || []).map((p) => ({ type: p.methodName, amount: p.amount })),
-            items: (t.items || []).map((i) => ({ name: i.productName || i.name, quantity: i.quantity, total: i.total })),
+            total: Number(t.total),
+            discountPercent: Number(t.discountPercent || 0),
+            discountAmount: Number(t.discountAmount || 0),
+            payments: (t.payments || []).map((p) => ({
+              type: p.methodName,
+              amount: Number(p.amount),
+              baseAmount: Number(p.baseAmount || p.amount),
+              surchargePercent: Number(p.surchargePercent || 0),
+            })),
+            items: (t.items || []).map((i) => ({
+              name: i.productName || i.name,
+              quantity: Number(i.quantity),
+              total: Number(i.total),
+            })),
           })));
         } catch {
           setTransactions([]);
@@ -129,9 +140,20 @@ export default function App() {
       id: String(data.id),
       date: data.date,
       time: data.time,
-      total: data.total,
-      payments: (data.payments || []).map((p) => ({ type: p.methodName, amount: p.amount })),
-      items: (data.items || []).map((i) => ({ name: i.productName || i.name, quantity: i.quantity, total: i.total })),
+      total: Number(data.total),
+      discountPercent: Number(data.discountPercent || 0),
+      discountAmount: Number(data.discountAmount || 0),
+      payments: (data.payments || []).map((p) => ({
+        type: p.methodName,
+        amount: Number(p.amount),
+        baseAmount: Number(p.baseAmount || p.amount),
+        surchargePercent: Number(p.surchargePercent || 0),
+      })),
+      items: (data.items || []).map((i) => ({
+        name: i.productName || i.name,
+        quantity: Number(i.quantity),
+        total: Number(i.total),
+      })),
     };
     setTransactions((prev) => [normalized, ...prev]);
   }

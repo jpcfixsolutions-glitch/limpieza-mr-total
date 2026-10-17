@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Search, Plus, Edit2, Trash2, AlertTriangle, X, Package, ScanBarcode, Tags, PackageMinus } from "lucide-react";
+import { Search, Plus, Edit2, Trash2, AlertTriangle, X, Package, ScanBarcode, Tags, PackageMinus, ChevronDown } from "lucide-react";
 import { Loader } from "./Loader.jsx";
 import { toast } from "sonner";
 import api from "../../services/api.js";
@@ -13,6 +13,14 @@ import { ProductExtractionModal } from "./ProductExtractionModal.jsx";
 
 const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", cost: "", targetProfitability: "40", categoryId: null, priceGroupId: null, stock: "", minStock: "", icon: "Package", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
 const PRODUCT_DRAFT_STORAGE_KEY = "descartables-yofre:product-draft";
+
+function normalizeSearch(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLocaleLowerCase("es");
+}
 
 function loadProductDraft() {
   try {
@@ -96,6 +104,7 @@ export function InventarioView() {
   const [deleting, setDeleting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [lowStockExpanded, setLowStockExpanded] = useState(false);
   const [selectedLowStockCategory, setSelectedLowStockCategory] = useState(null);
   const [brands, setBrands] = useState([]);
   const [collections, setCollections] = useState([]);
@@ -161,15 +170,14 @@ export function InventarioView() {
   );
 
   const filteredInventory = useMemo(() => {
-    const term = searchTerm.toLowerCase();
+    const term = normalizeSearch(searchTerm);
     const code = searchTerm.trim();
     return inventory
       .filter((p) => {
-        const matchesSearch =
-          (p.name || "").toLowerCase().includes(term) ||
-          (p.category || "").toLowerCase().includes(term) ||
-          (p.codbarra && String(p.codbarra).includes(code)) ||
-          (p.priceGroupName || "").toLowerCase().includes(term);
+        const searchableText = [p.name, p.category, p.priceGroupName, p.packTypeName]
+          .map(normalizeSearch)
+          .join(" ");
+        const matchesSearch = !term || searchableText.includes(term) || String(p.codbarra || "").includes(code);
         const matchesCategory = selectedCategory === "Todos" || p.category === selectedCategory;
         const matchesGroup =
           groupFilter === "todos" ||
@@ -183,10 +191,11 @@ export function InventarioView() {
   }, [inventory, searchTerm, selectedCategory, groupFilter]);
 
   const filteredRows = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
+    const term = normalizeSearch(searchTerm);
+    const code = searchTerm.trim();
     const promotionRows = selectedCategory === "Todos" && groupFilter === "todos"
       ? promotions
-        .filter((promotion) => !term || promotion.name.toLowerCase().includes(term) || (promotion.description || "").toLowerCase().includes(term) || promotion.items.some((item) => item.name.toLowerCase().includes(term) || String(item.codbarra || "").includes(searchTerm.trim())))
+        .filter((promotion) => !term || normalizeSearch(`${promotion.name} ${promotion.description || ""}`).includes(term) || promotion.items.some((item) => normalizeSearch(item.name).includes(term) || String(item.codbarra || "").includes(code)))
         .map((promotion) => ({ ...promotion, rowType: "promotion", rowId: `promotion-${promotion.id}` }))
       : [];
     return [...filteredInventory.map((product) => ({ ...product, rowType: "product", rowId: `product-${product.id}` })), ...promotionRows]
@@ -423,12 +432,23 @@ export function InventarioView() {
       </div>
 
       {lowStockItems.length > 0 && (
-        <div className="bg-primary/20 border border-primary/40 rounded-xl p-6 mb-6 shadow-sm">
-          <div className="flex items-start gap-4">
-            <AlertTriangle className="text-foreground flex-shrink-0" size={24} />
-            <div className="flex-1">
-              <h3 className="text-foreground font-bold mb-2">Alerta de Stock Bajo</h3>
-              <p className="text-foreground/80 font-medium text-sm mb-4">{lowStockItems.length} productos en su límite mínimo o por debajo.</p>
+        <div className="bg-primary/20 border border-primary/40 rounded-xl mb-6 shadow-sm overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setLowStockExpanded((current) => !current)}
+            aria-expanded={lowStockExpanded}
+            className="w-full flex items-center gap-3 p-4 text-left hover:bg-primary/10 transition-colors"
+          >
+            <AlertTriangle className="text-foreground flex-shrink-0" size={22} />
+            <div className="flex-1 min-w-0">
+              <h3 className="text-foreground font-bold">Alerta de Stock Bajo</h3>
+              <p className="text-foreground/80 font-medium text-sm">{lowStockItems.length} productos en {lowStockByCategory.length} categorías.</p>
+            </div>
+            <ChevronDown className={`text-foreground transition-transform ${lowStockExpanded ? "rotate-180" : ""}`} size={22} />
+          </button>
+
+          {lowStockExpanded && (
+            <div className="border-t border-primary/30 p-4">
 
               <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto pr-1" aria-label="Categorías con stock bajo">
                 {lowStockByCategory.map(({ category, products }) => {
@@ -480,7 +500,7 @@ export function InventarioView() {
                 </div>
               )}
             </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -542,6 +562,12 @@ export function InventarioView() {
           </select>
         </div>
       </div>
+
+      {searchTerm.trim() && (
+        <p className="mb-4 text-sm font-medium text-foreground/70">
+          {filteredRows.length} resultado{filteredRows.length === 1 ? "" : "s"} para “{searchTerm.trim()}”
+        </p>
+      )}
 
       {selectedIds.length > 0 && (
         <div className="mb-4 bg-secondary text-foreground rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 shadow-md">

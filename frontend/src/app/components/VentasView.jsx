@@ -191,6 +191,8 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
   };
 
   const handleUpdateQuantity = (lineId, quantity) => {
+    quantity = Number(quantity);
+    if (!Number.isInteger(quantity)) return;
     if (quantity <= 0) { handleRemoveItem(lineId); return; }
     const item = cartItems.find((i) => i.lineId === lineId);
     if (!item) return;

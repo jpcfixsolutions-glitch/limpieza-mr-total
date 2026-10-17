@@ -356,13 +356,13 @@ export function EstadisticasView() {
           </div>
         </div>
         <div className={`rounded-xl p-6 border flex flex-col shadow-sm lg:col-span-2 xl:col-span-1 ${balanceNeto>=0?"bg-surface border-success/30":"bg-surface border-red-400/30"}`}>
-          <div className={`flex items-center gap-3 mb-2 ${balanceNeto>=0?"text-success":"text-foreground"}`}>
+          <div className={`flex items-center gap-3 mb-2 ${balanceNeto>=0?"text-success":"text-red-600"}`}>
             <Wallet size={20}/><h3 className="font-bold">Balance Neto</h3>
           </div>
           <p className="text-3xl font-black">
-            <span className={balanceNeto>=0?"text-success":"text-foreground"}>{balanceNeto>=0?"+":"-"}${Math.abs(balanceNeto).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+            <span className={balanceNeto>=0?"text-success":"text-red-600"}>{balanceNeto>=0?"+":"-"}${Math.abs(balanceNeto).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
           </p>
-          <p className={`text-sm mt-1 mb-4 font-bold ${balanceNeto>=0?"text-success/70":"text-foreground/70"}`}>
+          <p className={`text-sm mt-1 mb-4 font-bold ${balanceNeto>=0?"text-success/70":"text-red-600/80"}`}>
             Rentabilidad: {margenPorcentaje.toFixed(1)}%
           </p>
           <div className={`border-t pt-4 space-y-2 ${balanceNeto>=0?"border-success/20":"border-primary/20"}`}>

@@ -37,7 +37,20 @@ export function CartSidebar({ items, onUpdateQuantity, onRemoveItem, onCheckout,
                 >
                   <Minus size={16} />
                 </button>
-                <span className="text-foreground font-bold w-7 text-center text-sm">{item.quantity}</span>
+                <input
+                  type="number"
+                  min="1"
+                  max={maxQty}
+                  step="1"
+                  value={item.quantity}
+                  onFocus={(event) => event.target.select()}
+                  onChange={(event) => {
+                    const quantity = Number(event.target.value);
+                    if (Number.isInteger(quantity) && quantity > 0) onUpdateQuantity(item.lineId, quantity);
+                  }}
+                  aria-label={`Cantidad de ${item.name}`}
+                  className="w-14 h-8 rounded-md border border-foreground/15 bg-background px-1 text-center text-sm font-bold text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
                 <button
                   onClick={() => onUpdateQuantity(item.lineId, item.quantity + 1)}
                   disabled={item.quantity >= maxQty}

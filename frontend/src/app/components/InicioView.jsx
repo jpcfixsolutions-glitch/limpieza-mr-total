@@ -98,13 +98,23 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
 
   const initialCash = registerData?.initialCash || 0;
 
-  const recentSales = transactions.slice(0, 5).map((t) => ({
-    id: t.id,
-    time: t.time,
-    total: t.total,
-    items: t.items?.reduce((sum, i) => sum + i.quantity, 0) || 0,
-    details: t.items?.map((i) => `${i.quantity}x ${i.name}`) || [],
-  }));
+  const recentSales = transactions.slice(0, 5).map((t) => {
+    const payments = t.payments || [];
+    return {
+      id: t.id,
+      date: t.date,
+      time: t.time,
+      total: Number(t.total || 0),
+      itemCount: t.items?.reduce((sum, item) => sum + Number(item.quantity || 0), 0) || 0,
+      items: t.items || [],
+      payments,
+      discountPercent: Number(t.discountPercent || 0),
+      discountAmount: Number(t.discountAmount || 0),
+      accountAmount: payments
+        .filter((payment) => isAccount(payment.type))
+        .reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
+    };
+  });
 
   const ventasHoy = isCajaOpen ? transactions.reduce((sum, t) => sum + t.total, 0) : 0;
   const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
@@ -219,24 +229,50 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
                         <div className="w-10 h-10 rounded-full bg-background shadow-inner flex items-center justify-center text-foreground font-bold text-xs">#{sale.id}</div>
                         <div>
                           <p className="text-foreground font-bold">Venta en salón</p>
-                          <p className="text-foreground/70 font-medium text-sm">{sale.time} • {sale.items} producto{sale.items !== 1 ? "s" : ""}</p>
+                          <p className="text-foreground/70 font-medium text-sm">{sale.date ? `${sale.date} • ` : ""}{sale.time} • {sale.itemCount} producto{sale.itemCount !== 1 ? "s" : ""}</p>
                         </div>
                       </div>
                       <span className="text-foreground font-black text-lg">+${sale.total.toFixed(2)}</span>
                     </div>
-                    {sale.details.length > 0 && (
-                      <div className="ml-14 rounded-lg p-3 border border-foreground/15 bg-background">
-                        <p className="text-xs font-bold mb-2 uppercase tracking-wider text-foreground/60">Productos vendidos:</p>
-                        <ul className="m-0 p-0 list-none">
-                          {sale.details.map((detail, idx) => (
-                            <li key={idx} className="flex items-center gap-2 mb-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0 inline-block"></span>
-                              <span className="text-sm font-semibold text-foreground">{detail}</span>
-                            </li>
-                          ))}
-                        </ul>
+                    <div className="ml-0 sm:ml-14 rounded-lg p-3 border border-foreground/15 bg-background space-y-3">
+                      <div>
+                        <p className="text-xs font-bold mb-1.5 uppercase tracking-wider text-foreground/60">Método de pago</p>
+                        <div className="flex flex-wrap gap-2">
+                          {sale.payments.length > 0 ? sale.payments.map((payment, index) => (
+                            <span key={`${payment.type}-${index}`} className="rounded-full bg-surface border border-foreground/10 px-2.5 py-1 text-xs font-bold text-foreground">
+                              {payment.type}: ${Number(payment.amount || 0).toFixed(2)}
+                            </span>
+                          )) : <span className="text-xs font-medium text-foreground/60">Sin método registrado</span>}
+                        </div>
                       </div>
-                    )}
+                      {sale.items.length > 0 && (
+                        <div>
+                          <p className="text-xs font-bold mb-1.5 uppercase tracking-wider text-foreground/60">Productos vendidos</p>
+                          <ul className="m-0 p-0 list-none space-y-1">
+                            {sale.items.map((item, index) => (
+                              <li key={`${item.name}-${index}`} className="flex items-center justify-between gap-3 text-sm font-semibold text-foreground">
+                                <span className="min-w-0"><span className="text-primary">{item.quantity}×</span> {item.name}</span>
+                                <span className="shrink-0">${Number(item.total || 0).toFixed(2)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2 text-xs font-bold">
+                        {sale.discountAmount > 0 ? (
+                          <span className="rounded-full bg-success/10 text-success px-2.5 py-1">
+                            Descuento{sale.discountPercent > 0 ? ` ${sale.discountPercent}%` : ""}: -${sale.discountAmount.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-surface text-foreground/60 px-2.5 py-1">Sin descuento</span>
+                        )}
+                        {sale.accountAmount > 0 && (
+                          <span className="rounded-full bg-primary/15 text-primary px-2.5 py-1">
+                            Cuenta corriente: ${sale.accountAmount.toFixed(2)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 ))
               ) : (
