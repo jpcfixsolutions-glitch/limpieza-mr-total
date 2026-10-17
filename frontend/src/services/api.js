@@ -1,7 +1,8 @@
 import axios from "axios";
 
-// Usamos la variable de entorno de Vite. Si no existe, usamos localhost.
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
+// En desarrollo, /api pasa por el proxy de Vite. En produccion, vite.config.js
+// exige la URL publica del proyecto backend.
+const API_URL = (import.meta.env.VITE_API_URL?.trim() || "/api").replace(/\/+$/, "");
 
 const api = axios.create({
   baseURL: API_URL,
