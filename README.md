@@ -1,6 +1,6 @@
 # limpieza-mr-total
 
-Aplicacion de gestion compuesta por dos proyectos desplegables de forma
+Aplicacion de gestion compuesta por dos proyectos desplegables de formaa
 independiente:
 
 - `frontend`: React + Vite.
