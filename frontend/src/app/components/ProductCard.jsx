@@ -9,6 +9,9 @@ function SaleButton({ label, price, enabled, tone, onClick }) {
     unit: enabled
       ? "bg-secondary hover:brightness-125 text-foreground shadow-secondary/20"
       : "bg-surface text-foreground/40 cursor-not-allowed",
+    wholesale: enabled
+      ? "bg-success hover:brightness-110 text-foreground shadow-success/20"
+      : "bg-surface text-foreground/40 cursor-not-allowed",
     pack: enabled
       ? "bg-primary hover:brightness-125 text-foreground shadow-primary/20"
       : "bg-surface text-foreground/40 cursor-not-allowed",
@@ -38,8 +41,9 @@ export const ProductCard = memo(function ProductCard({ product, onAddToCart }) {
   const sellPack = hasPackSale(product);
   const tiers = activeTiers(product);
   const canAddUnit = product.stock >= 1;
+  const hasWholesalePrice = Number(product.wholesalePrice) > 0;
   const canAddPack = sellPack && product.stock >= Number(product.unitsPerPack);
-  const multiSale = sellPack || tiers.length > 0;
+  const multiSale = hasWholesalePrice || sellPack || tiers.length > 0;
 
   return (
     <div className={`product-card bg-surface border rounded-xl p-3 md:p-4 flex items-center justify-between gap-3 shadow-sm transition-all duration-300 ${noStock ? "border-red-500/40 opacity-70" : "border-foreground/15 hover:border-primary/50"}`}>
@@ -74,12 +78,21 @@ export const ProductCard = memo(function ProductCard({ product, onAddToCart }) {
       {multiSale ? (
         <div className="product-card__actions flex flex-wrap justify-end gap-1.5 ml-2 shrink-0 max-w-[70%]">
           <SaleButton
-            label="Unidad"
+            label={hasWholesalePrice ? "Minorista" : "Unidad"}
             price={product.price}
             enabled={canAddUnit}
             tone="unit"
             onClick={() => onAddToCart(product, "unidad")}
           />
+          {hasWholesalePrice && (
+            <SaleButton
+              label="Mayorista"
+              price={product.wholesalePrice}
+              enabled={canAddUnit}
+              tone="wholesale"
+              onClick={() => onAddToCart(product, "mayorista")}
+            />
+          )}
           {sellPack && (
             <SaleButton
               label={`${packTypeLabel(product)} x${product.unitsPerPack}`}

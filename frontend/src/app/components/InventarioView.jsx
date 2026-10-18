@@ -7,11 +7,10 @@ import { useBarcodeScanner } from "../hooks/useBarcodeScanner.js";
 import { formatStock, hasPackSale, packTypeLabel } from "../../utils/pack.js";
 import { calculatePriceForProfitability, calculateProfitabilityPercent, formatCatalogPrice, roundPriceInput } from "../../utils/price.js";
 import { PaginationBar, paginate, byNameEs } from "./PaginationBar.jsx";
-import { PRODUCT_ICON_OPTIONS } from "../../utils/productIcons.js";
 import { PromotionModal } from "./PromotionModal.jsx";
 import { ProductExtractionModal } from "./ProductExtractionModal.jsx";
 
-const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", cost: "", targetProfitability: "40", categoryId: null, priceGroupId: null, stock: "", minStock: "", icon: "Package", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
+const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", wholesalePrice: "", cost: "", targetProfitability: "40", categoryId: null, priceGroupId: null, stock: "", minStock: "", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
 const PRODUCT_DRAFT_STORAGE_KEY = "descartables-yofre:product-draft";
 
 function normalizeSearch(value) {
@@ -74,11 +73,11 @@ function toModalItem(product) {
     ...product,
     codbarra: product.codbarra || "",
     price: String(product.price),
+    wholesalePrice: product.wholesalePrice != null ? String(product.wholesalePrice) : "",
     cost: String(product.cost ?? ""),
     targetProfitability: profitability == null ? "" : profitability.toFixed(2),
     stock: String(product.stock),
     minStock: String(product.minStock),
-    icon: product.icon || "Package",
     priceGroupId: product.priceGroupId ?? null,
     packTypeId: product.packTypeId ?? null,
     unitsPerPack: Number(product.unitsPerPack) > 1 ? String(product.unitsPerPack) : "",
@@ -90,6 +89,8 @@ function toModalItem(product) {
 export function InventarioView() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("Todos");
+  const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
+  const [categoryQuery, setCategoryQuery] = useState("");
   const [inventory, setInventory] = useState([]);
   const [promotions, setPromotions] = useState([]);
   const [promotionModalOpen, setPromotionModalOpen] = useState(false);
@@ -160,6 +161,10 @@ export function InventarioView() {
     () => [...categories].sort((a, b) => byNameEs(a.name, b.name)),
     [categories]
   );
+  const categoryFilterOptions = useMemo(() => {
+    const term = normalizeSearch(categoryQuery);
+    return sortedCategories.filter((category) => !term || normalizeSearch(category.name).includes(term));
+  }, [sortedCategories, categoryQuery]);
   const sortedBrands = useMemo(
     () => [...brands].sort((a, b) => byNameEs(a.name, b.name)),
     [brands]
@@ -257,7 +262,6 @@ export function InventarioView() {
 
   const openEditProduct = useCallback((product) => {
     setProductModal({ isOpen: true, item: toModalItem(product), isNew: false });
-    setSearchTerm("");
     toast.success(`Producto encontrado: ${product.name}`);
   }, []);
 
@@ -329,9 +333,9 @@ export function InventarioView() {
         name: productModal.item.name,
         codbarra: productModal.item.codbarra?.trim() || null,
         categoryId: productModal.item.categoryId ? Number(productModal.item.categoryId) : null,
-        icon: productModal.item.icon || "Package",
         isAvailable: productModal.item.isAvailable !== false,
         price: parseFloat(productModal.item.price) || 0,
+        wholesalePrice: parseFloat(productModal.item.wholesalePrice) || 0,
         cost: parseFloat(productModal.item.cost) || 0,
         stock: parseInt(productModal.item.stock, 10) || 0,
         minStock: parseInt(productModal.item.minStock, 10) || 0,
@@ -419,9 +423,6 @@ export function InventarioView() {
   const selectedCollectionId = collections.some((c) => c.id === Number(productModal.item?.priceGroupId))
     ? Number(productModal.item.priceGroupId)
     : "";
-
-  const categoryNames = sortedCategories.map((c) => c.name);
-
 
   return (
     <div className="flex-1 min-w-0 p-4 pb-20 md:p-8 overflow-y-auto relative">
@@ -523,16 +524,43 @@ export function InventarioView() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
         <div>
           <label className="text-foreground/80 font-bold text-sm block mb-2">Categoría</label>
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm"
+          <div
+            className="relative"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) setCategoryMenuOpen(false);
+            }}
           >
-            <option value="Todos">Todas las categorías</option>
-            {categoryNames.map((cat) => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </select>
+            <button
+              type="button"
+              onClick={() => { setCategoryMenuOpen((current) => !current); setCategoryQuery(""); }}
+              aria-expanded={categoryMenuOpen}
+              className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm flex items-center justify-between gap-3"
+            >
+              <span className="truncate">{selectedCategory === "Todos" ? "Todas las categorías" : selectedCategory}</span>
+              <ChevronDown size={18} className={`shrink-0 transition-transform ${categoryMenuOpen ? "rotate-180" : ""}`} />
+            </button>
+            {categoryMenuOpen && (
+              <div className="absolute z-30 mt-2 w-full rounded-xl border border-foreground/15 bg-background p-2 shadow-2xl">
+                <div className="relative mb-2">
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground/50" />
+                  <input
+                    autoFocus
+                    value={categoryQuery}
+                    onChange={(event) => setCategoryQuery(event.target.value)}
+                    placeholder="Buscar categoría..."
+                    className="w-full rounded-lg border border-foreground/15 bg-surface py-2.5 pl-9 pr-3 text-sm font-medium text-foreground outline-none focus:border-primary"
+                  />
+                </div>
+                <div className="max-h-60 overflow-y-auto space-y-1">
+                  <button type="button" onClick={() => { setSelectedCategory("Todos"); setCategoryMenuOpen(false); }} className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold ${selectedCategory === "Todos" ? "bg-primary/15 text-primary" : "hover:bg-surface"}`}>Todas las categorías</button>
+                  {categoryFilterOptions.map((category) => (
+                    <button key={category.id} type="button" onClick={() => { setSelectedCategory(category.name); setCategoryMenuOpen(false); }} className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold ${selectedCategory === category.name ? "bg-primary/15 text-primary" : "hover:bg-surface"}`}>{category.name}</button>
+                  ))}
+                  {categoryFilterOptions.length === 0 && <p className="px-3 py-4 text-center text-sm text-foreground/60">No se encontraron categorías</p>}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         <div>
           <label className="text-foreground/80 font-bold text-sm block mb-2">Proveedor / Colección</label>
@@ -682,7 +710,8 @@ export function InventarioView() {
                       <span className="text-foreground/80 font-medium">${Number(product.cost || 0).toFixed(2)}</span>
                     </td>
                     <td className="p-4 whitespace-nowrap">
-                      <span className="text-foreground font-black block">${formatCatalogPrice(product.price)}</span>
+                      <span className="text-foreground font-black block">Minorista: ${formatCatalogPrice(product.price)}</span>
+                      {Number(product.wholesalePrice) > 0 && <span className="text-success font-bold text-xs block">Mayorista: ${formatCatalogPrice(product.wholesalePrice)}</span>}
                       {hasPackSale(product) && (
                         <span className="text-foreground/60 font-medium text-xs">{packTypeLabel(product)} x{product.unitsPerPack} ${formatCatalogPrice(product.packPrice)}</span>
                       )}
@@ -763,32 +792,6 @@ export function InventarioView() {
                   />
                 </div>
               ))}
-              {/* Selector de ícono */}
-              <div>
-                <label className="text-foreground/80 font-bold text-sm block mb-2">Ícono del producto</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {PRODUCT_ICON_OPTIONS.map(({ key, Icon, label }) => {
-                    const selected = (productModal.item.icon || "Package") === key;
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        title={label}
-                        onClick={() => setProductModal((prev) => ({ ...prev, item: { ...prev.item, icon: key } }))}
-                        className={`flex flex-col items-center gap-1 py-3 rounded-xl border transition-all ${
-                          selected
-                            ? "bg-primary/10 border-primary text-foreground shadow-sm font-bold"
-                            : "bg-surface border-surface text-foreground/60 font-medium hover:border-primary/50"
-                        }`}
-                      >
-                        <Icon size={20} />
-                        <span className="text-[10px] leading-tight text-center mt-1">{label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
               <div>
                 <label className="text-foreground/80 font-bold text-sm block mb-2">Categoría</label>
                 <select
@@ -833,7 +836,7 @@ export function InventarioView() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="text-foreground/80 font-bold text-sm block mb-2">Costo ($)</label>
                   <input
@@ -854,7 +857,7 @@ export function InventarioView() {
                   />
                 </div>
                 <div>
-                  <label className="text-foreground/80 font-bold text-sm block mb-2">Precio unidad ($)</label>
+                  <label className="text-foreground/80 font-bold text-sm block mb-2">Precio minorista ($)</label>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -872,6 +875,23 @@ export function InventarioView() {
                       const profitability = calculateProfitabilityPercent(prev.item.cost, price);
                       return { ...prev, item: { ...prev.item, price, targetProfitability: profitability == null ? prev.item.targetProfitability : profitability.toFixed(2) } };
                     })}
+                    onFocus={(e) => e.target.select()}
+                    placeholder="0"
+                    className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="text-foreground/80 font-bold text-sm block mb-2">Precio mayorista ($)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={productModal.item.wholesalePrice ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
+                      setProductModal((prev) => ({ ...prev, item: { ...prev.item, wholesalePrice: val } }));
+                    }}
+                    onBlur={(e) => setProductModal((prev) => ({ ...prev, item: { ...prev.item, wholesalePrice: roundPriceInput(e.target.value) } }))}
                     onFocus={(e) => e.target.select()}
                     placeholder="0"
                     className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
@@ -896,7 +916,7 @@ export function InventarioView() {
                     className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
                   />
                 </div>
-                <p className="sm:col-span-3 text-foreground/60 font-medium text-xs">
+                <p className="sm:col-span-2 text-foreground/60 font-medium text-xs">
                   Los precios de venta se redondean hacia arriba a la próxima decena y se guardan sin centavos. El costo conserva el valor exacto ingresado.
                 </p>
               </div>

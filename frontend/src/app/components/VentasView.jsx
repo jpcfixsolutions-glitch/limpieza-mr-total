@@ -104,6 +104,10 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
       unitsEach = packSizeOf(product);
       price = Number(product.packPrice);
       toastLabel = `${product.name} (${packTypeLabel(product)} x${unitsEach})`;
+    } else if (saleMode === "mayorista" && Number(product.wholesalePrice) > 0) {
+      mode = "mayorista";
+      price = Number(product.wholesalePrice);
+      toastLabel = `${product.name} (precio mayorista)`;
     } else if (saleMode === "escala" && extra.tier) {
       mode = "escala";
       unitsEach = Number(extra.tier.quantity);

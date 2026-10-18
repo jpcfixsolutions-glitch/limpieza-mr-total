@@ -1,13 +1,11 @@
 import { ProductModel } from "../models/product.model.js";
 import { ProductPriceTierModel } from "../models/productPriceTier.model.js";
-import { PRODUCT_ICONS, roundPriceUpToTen } from "../constants.js";
+import { roundPriceUpToTen } from "../constants.js";
 import { getArgentinaTime } from "../db/timeUtils.js";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { businessUnitProducts, productPriceTiers, products, stockModifications } from "../db/schema.js";
 import { adjustInventoryInTransaction, ensureInventoryBalance } from "./inventory.service.js";
-
-const VALID_ICONS = new Set(PRODUCT_ICONS);
 
 function normalizeCodbarra(value) {
   if (value === undefined || value === null || value === "") return null;
@@ -124,14 +122,10 @@ export const ProductService = {
     return attachTiers(product);
   },
 
-  async create({ name, codbarra, categoryId, priceGroupId, packTypeId, cost, price, stock, minStock, icon, isAvailable, unitsPerPack, packPrice, priceTiers, fulfillmentMode }, businessUnit = null) {
+  async create({ name, codbarra, categoryId, priceGroupId, packTypeId, cost, price, wholesalePrice, stock, minStock, isAvailable, unitsPerPack, packPrice, priceTiers, fulfillmentMode }, businessUnit = null) {
     if (!name || price === undefined) {
       throw { status: 400, message: "Nombre y precio son requeridos." };
     }
-    if (icon && !VALID_ICONS.has(icon)) {
-      throw { status: 400, message: `Ícono inválido. Válidos: ${PRODUCT_ICONS.join(", ")}` };
-    }
-
     const normalizedCodbarra = normalizeCodbarra(codbarra);
     const pack = normalizePackFields({ unitsPerPack, packPrice });
     const tiers = normalizePriceTiers(priceTiers) || [];
@@ -141,6 +135,7 @@ export const ProductService = {
       const inventoryMin = normalizeStock(minStock ?? 5, "El stock mínimo");
       const normalizedCost = normalizeMoney(cost ?? 0, "El costo");
       const normalizedPrice = normalizeCatalogPrice(price, "El precio unitario");
+      const normalizedWholesalePrice = normalizeCatalogPrice(wholesalePrice ?? 0, "El precio mayorista");
       const mode = businessUnit.code === "LOCAL" && fulfillmentMode === "WAREHOUSE_DIRECT"
         ? "WAREHOUSE_DIRECT" : "OWN_STOCK";
       try {
@@ -155,7 +150,7 @@ export const ProductService = {
             price: normalizedPrice,
             stock: businessUnit.code === "LOCAL" ? inventoryStock : 0,
             minStock: businessUnit.code === "LOCAL" ? inventoryMin : 0,
-            icon: icon || "Package",
+            icon: "Package",
             isAvailable: businessUnit.code === "LOCAL" ? isAvailable !== false : true,
             unitsPerPack: pack.unitsPerPack,
             packPrice: pack.packPrice,
@@ -167,6 +162,7 @@ export const ProductService = {
             minStock: inventoryMin,
             cost: normalizedCost,
             salePrice: normalizedPrice,
+            wholesalePrice: normalizedWholesalePrice,
             isAvailable: isAvailable !== false,
             fulfillmentMode: mode,
             updatedAt: getArgentinaTime().datetime,
@@ -191,7 +187,7 @@ export const ProductService = {
         price: normalizeCatalogPrice(price, "El precio unitario"),
         stock: stock ?? 0,
         minStock: minStock ?? 5,
-        icon: icon || "Package",
+        icon: "Package",
         isAvailable: isAvailable !== false,
         unitsPerPack: pack.unitsPerPack,
         packPrice: pack.packPrice,
@@ -211,9 +207,7 @@ export const ProductService = {
     const recordStockModification = updates.recordStockModification === true;
     delete updates.recordStockModification;
 
-    if (updates.icon && !VALID_ICONS.has(updates.icon)) {
-      throw { status: 400, message: `Ícono inválido. Válidos: ${PRODUCT_ICONS.join(", ")}` };
-    }
+    delete updates.icon;
 
     if ("codbarra" in updates) {
       updates.codbarra = normalizeCodbarra(updates.codbarra);
@@ -236,6 +230,10 @@ export const ProductService = {
 
     if ("price" in updates) {
       updates.price = normalizeCatalogPrice(updates.price, "El precio unitario");
+    }
+
+    if ("wholesalePrice" in updates) {
+      updates.wholesalePrice = normalizeCatalogPrice(updates.wholesalePrice, "El precio mayorista");
     }
 
     const nextTiers = "priceTiers" in updates ? normalizePriceTiers(updates.priceTiers) : null;
@@ -272,13 +270,14 @@ export const ProductService = {
       if ("minStock" in updates) inventoryFields.minStock = normalizeStock(updates.minStock, "El stock mínimo");
       if ("cost" in updates) inventoryFields.cost = updates.cost;
       if ("price" in updates) inventoryFields.salePrice = updates.price;
+      if ("wholesalePrice" in updates) inventoryFields.wholesalePrice = updates.wholesalePrice;
       if ("isAvailable" in updates) inventoryFields.isAvailable = updates.isAvailable !== false;
       if ("fulfillmentMode" in updates) {
         inventoryFields.fulfillmentMode = businessUnit.code === "LOCAL" && updates.fulfillmentMode === "WAREHOUSE_DIRECT"
           ? "WAREHOUSE_DIRECT" : "OWN_STOCK";
       }
       const catalogFields = {};
-      for (const key of ["name", "codbarra", "categoryId", "priceGroupId", "packTypeId", "icon", "unitsPerPack", "packPrice"]) {
+      for (const key of ["name", "codbarra", "categoryId", "priceGroupId", "packTypeId", "unitsPerPack", "packPrice"]) {
         if (key in updates) catalogFields[key] = updates[key];
       }
       if (businessUnit.code === "LOCAL") {
@@ -325,6 +324,7 @@ export const ProductService = {
       }
     }
 
+    delete updates.wholesalePrice;
     try {
       return await ProductModel.updateWithDetails(Number(id), updates, {
         tiers: nextTiers,

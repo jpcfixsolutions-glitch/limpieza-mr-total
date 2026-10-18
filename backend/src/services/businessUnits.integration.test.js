@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import jwt from "jsonwebtoken";
 
-let client, db, WarehouseService, InventoryService, TransactionService, CustomerService, StatsService, authenticate;
+let client, db, WarehouseService, InventoryService, TransactionService, CustomerService, ProductService, StatsService, authenticate;
 let directory;
 const local = { id: 1, code: "LOCAL", name: "Local" };
 const warehouse = { id: 2, code: "WAREHOUSE", name: "Galpón" };
@@ -19,6 +19,7 @@ before(async () => {
   ({ InventoryService } = await import("./inventory.service.js"));
   ({ TransactionService } = await import("./transaction.service.js"));
   ({ CustomerService } = await import("./customer.service.js"));
+  ({ ProductService } = await import("./product.service.js"));
   ({ StatsService } = await import("./stats.service.js"));
   ({ authenticate } = await import("../middleware/auth.middleware.js"));
   await client.batch([
@@ -27,7 +28,7 @@ before(async () => {
     "CREATE TABLE business_units (id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL, type TEXT NOT NULL, is_active INTEGER NOT NULL, created_at TEXT, updated_at TEXT)",
     "CREATE TABLE categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
     "CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT NOT NULL, cod_barra TEXT UNIQUE, category_id INTEGER, price_group_id INTEGER, pack_type_id INTEGER, cost REAL NOT NULL, price REAL NOT NULL, units_per_pack INTEGER NOT NULL, pack_price REAL, use_suggested_price INTEGER NOT NULL DEFAULT 0, suggested_price_percent REAL, stock INTEGER NOT NULL, min_stock INTEGER NOT NULL, icon TEXT NOT NULL, is_available INTEGER NOT NULL, created_at TEXT)",
-    "CREATE TABLE business_unit_products (id INTEGER PRIMARY KEY AUTOINCREMENT, business_unit_id INTEGER NOT NULL, product_id INTEGER NOT NULL, stock INTEGER NOT NULL CHECK(stock >= 0), min_stock INTEGER NOT NULL, cost REAL NOT NULL, sale_price REAL NOT NULL, is_available INTEGER NOT NULL, fulfillment_mode TEXT NOT NULL, updated_at TEXT, UNIQUE(business_unit_id, product_id))",
+    "CREATE TABLE business_unit_products (id INTEGER PRIMARY KEY AUTOINCREMENT, business_unit_id INTEGER NOT NULL, product_id INTEGER NOT NULL, stock INTEGER NOT NULL CHECK(stock >= 0), min_stock INTEGER NOT NULL, cost REAL NOT NULL, sale_price REAL NOT NULL, wholesale_price REAL NOT NULL DEFAULT 0, is_available INTEGER NOT NULL, fulfillment_mode TEXT NOT NULL, updated_at TEXT, UNIQUE(business_unit_id, product_id))",
     "CREATE TABLE inventory_movements (id INTEGER PRIMARY KEY AUTOINCREMENT, business_unit_id INTEGER NOT NULL, product_id INTEGER NOT NULL, movement_type TEXT NOT NULL, direction TEXT NOT NULL, quantity INTEGER NOT NULL, unit_cost REAL NOT NULL, stock_before INTEGER NOT NULL, stock_after INTEGER NOT NULL, counterpart_business_unit_id INTEGER, source_type TEXT, source_id TEXT, source_item_id TEXT, idempotency_key TEXT NOT NULL UNIQUE, reversal_of_movement_id INTEGER, user_id INTEGER, notes TEXT, created_at TEXT)",
     "CREATE TABLE inventory_transfers (id INTEGER PRIMARY KEY AUTOINCREMENT, from_business_unit_id INTEGER NOT NULL, to_business_unit_id INTEGER NOT NULL, product_id INTEGER NOT NULL, quantity INTEGER NOT NULL, unit_cost REAL NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, user_id INTEGER, notes TEXT, created_at TEXT)",
     "CREATE TABLE cash_registers (id INTEGER PRIMARY KEY, opened_by INTEGER, initial_cash REAL NOT NULL, is_open INTEGER NOT NULL, opened_at TEXT, closed_at TEXT, expected_cash REAL, counted_cash REAL, cash_difference REAL, arqueo_notes TEXT, next_initial_cash REAL)",
@@ -57,7 +58,7 @@ before(async () => {
     "INSERT INTO business_units VALUES (1, 'LOCAL', 'Local', 'retail', 1, NULL, NULL), (2, 'WAREHOUSE', 'Galpón', 'warehouse', 1, NULL, NULL)",
     "INSERT INTO categories VALUES (1, 'General')",
     "INSERT INTO products VALUES (1, 'Producto propio', '1', 1, NULL, NULL, 10, 20, 1, NULL, 0, NULL, 10, 1, 'Package', 1, NULL), (2, 'Producto directo', '2', 1, NULL, NULL, 5, 15, 1, NULL, 0, NULL, 5, 1, 'Package', 1, NULL)",
-    "INSERT INTO business_unit_products (business_unit_id, product_id, stock, min_stock, cost, sale_price, is_available, fulfillment_mode) VALUES (1,1,10,1,10,20,1,'OWN_STOCK'), (2,1,20,1,8,18,1,'OWN_STOCK'), (1,2,5,1,5,15,1,'WAREHOUSE_DIRECT'), (2,2,8,1,4,12,1,'OWN_STOCK')",
+    "INSERT INTO business_unit_products (business_unit_id, product_id, stock, min_stock, cost, sale_price, wholesale_price, is_available, fulfillment_mode) VALUES (1,1,10,1,10,20,17,1,'OWN_STOCK'), (2,1,20,1,8,18,0,1,'OWN_STOCK'), (1,2,5,1,5,15,13,1,'WAREHOUSE_DIRECT'), (2,2,8,1,4,12,0,1,'OWN_STOCK')",
     "INSERT INTO cash_registers VALUES (1,1,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL)",
     "INSERT INTO customers (id,name,last_name,document,is_active,business_unit_id,is_internal) VALUES (1,'Cliente','Local','DUP',1,1,0),(2,'Cliente','Mayorista','DUP',1,2,0),(3,'Local','Mr.Total','INTERNAL-LOCAL',1,2,1)",
     "INSERT INTO payment_methods VALUES (1, 'Efectivo', 0)",
@@ -66,7 +67,7 @@ before(async () => {
   ], "write");
 });
 
-after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true }); });
+after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 async function stock(unitId, productId) {
   const result = await client.execute({ sql: "SELECT stock FROM business_unit_products WHERE business_unit_id=? AND product_id=?", args: [unitId, productId] });
@@ -101,6 +102,11 @@ test("flujos multiunidad, idempotencia, reversiones y concurrencia", async (t) =
     assert.equal(warehouseCustomers.find((c) => c.id === 3).isInternal, true);
   });
 
+  await t.test("el catálogo local expone el precio mayorista separado", async () => {
+    const catalog = await ProductService.getAll(local);
+    assert.equal(catalog.find((product) => product.id === 1).wholesalePrice, 17);
+  });
+
   await t.test("recibir una compra aumenta stock una vez y cancelarla lo revierte una vez", async () => {
     const purchase = await WarehouseService.createPurchase({ supplier: "Proveedor", idempotencyKey: "purchase-1", items: [{ productId: 1, quantity: 5, unitCost: 9 }] }, 1, warehouse);
     await WarehouseService.changePurchaseStatus(purchase.id, "received", 1, warehouse);
@@ -131,8 +137,10 @@ test("flujos multiunidad, idempotencia, reversiones y concurrencia", async (t) =
   });
 
   await t.test("una venta local normal sólo descuenta Local", async () => {
-    await TransactionService.create({ total: 40, payments: cashPayment, items: [{ productId: 1, quantity: 2, price: 20, total: 40 }], idempotencyKey: "sale-normal" }, 1, local);
+    const sale = await TransactionService.create({ total: 34, payments: cashPayment, items: [{ productId: 1, quantity: 2, price: 17, total: 34, saleMode: "mayorista" }], idempotencyKey: "sale-normal" }, 1, local);
     assert.equal(await stock(1, 1), 12); assert.equal(await stock(2, 1), 16);
+    assert.equal(sale.items[0].saleMode, "mayorista");
+    assert.equal(sale.items[0].price, 17);
   });
 
   await t.test("abastecimiento directo descuenta exactamente una vez el Galpón", async () => {

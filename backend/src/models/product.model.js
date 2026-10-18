@@ -39,6 +39,7 @@ function contextualFields() {
     minStock: sql`COALESCE(${businessUnitProducts.minStock}, 0)`.mapWith(Number),
     cost: sql`COALESCE(${businessUnitProducts.cost}, ${products.cost}, 0)`.mapWith(Number),
     price: sql`COALESCE(${businessUnitProducts.salePrice}, ${products.price}, 0)`.mapWith(Number),
+    wholesalePrice: sql`COALESCE(${businessUnitProducts.wholesalePrice}, 0)`.mapWith(Number),
     isAvailable: sql`COALESCE(${businessUnitProducts.isAvailable}, 0)`.mapWith(Boolean),
     fulfillmentMode: sql`COALESCE(${businessUnitProducts.fulfillmentMode}, 'OWN_STOCK')`,
     inventoryConfigured: sql`CASE WHEN ${businessUnitProducts.id} IS NULL THEN 0 ELSE 1 END`.mapWith(Boolean),
