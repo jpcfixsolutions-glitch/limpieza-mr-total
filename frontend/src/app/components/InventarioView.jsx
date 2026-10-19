@@ -9,17 +9,13 @@ import { calculateOptionalProfitabilityPercent, calculatePriceForProfitability, 
 import { PaginationBar, paginate, byNameEs } from "./PaginationBar.jsx";
 import { PromotionModal } from "./PromotionModal.jsx";
 import { ProductExtractionModal } from "./ProductExtractionModal.jsx";
+import { filterCategories } from "../../utils/categorySearch.js";
+import { normalizeProductSearch, searchProducts } from "../../utils/productSearch.js";
 
 const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", wholesalePrice: "", cost: "", targetProfitability: "40", targetWholesaleProfitability: "", categoryId: null, priceGroupId: null, stock: "", minStock: "", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
 const PRODUCT_DRAFT_STORAGE_KEY = "descartables-yofre:product-draft";
 
-function normalizeSearch(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLocaleLowerCase("es");
-}
+const normalizeSearch = normalizeProductSearch;
 
 function loadProductDraft() {
   try {
@@ -89,9 +85,10 @@ function toModalItem(product) {
 
 export function InventarioView() {
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("Todos");
+  const [selectedCategoryId, setSelectedCategoryId] = useState(null);
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
   const [categoryQuery, setCategoryQuery] = useState("");
+  const [activeCategoryIndex, setActiveCategoryIndex] = useState(0);
   const [inventory, setInventory] = useState([]);
   const [promotions, setPromotions] = useState([]);
   const [promotionModalOpen, setPromotionModalOpen] = useState(false);
@@ -163,9 +160,13 @@ export function InventarioView() {
     [categories]
   );
   const categoryFilterOptions = useMemo(() => {
-    const term = normalizeSearch(categoryQuery);
-    return sortedCategories.filter((category) => !term || normalizeSearch(category.name).includes(term));
+    return filterCategories(sortedCategories, categoryQuery);
   }, [sortedCategories, categoryQuery]);
+  const selectedCategory = useMemo(
+    () => sortedCategories.find((category) => String(category.id) === String(selectedCategoryId)) || null,
+    [sortedCategories, selectedCategoryId]
+  );
+  const activeCategoryOptionIndex = Math.min(activeCategoryIndex, categoryFilterOptions.length);
   const sortedBrands = useMemo(
     () => [...brands].sort((a, b) => byNameEs(a.name, b.name)),
     [brands]
@@ -177,38 +178,41 @@ export function InventarioView() {
 
   const filteredInventory = useMemo(() => {
     const term = normalizeSearch(searchTerm);
-    const code = searchTerm.trim();
-    return inventory
-      .filter((p) => {
-        const searchableText = [p.name, p.category, p.priceGroupName, p.packTypeName]
-          .map(normalizeSearch)
-          .join(" ");
-        const matchesSearch = !term || searchableText.includes(term) || String(p.codbarra || "").includes(code);
-        const matchesCategory = selectedCategory === "Todos" || p.category === selectedCategory;
-        const matchesGroup =
-          groupFilter === "todos" ||
-          (groupFilter === "sin-grupo" && !p.priceGroupId) ||
-          (groupFilter === "proveedores" && p.priceGroupType === "proveedor") ||
-          (groupFilter === "colecciones" && p.priceGroupType === "coleccion") ||
-          String(p.priceGroupId) === String(groupFilter);
-        return matchesSearch && matchesCategory && matchesGroup;
-      })
-      .sort((a, b) => byNameEs(a.name, b.name));
-  }, [inventory, searchTerm, selectedCategory, groupFilter]);
+    const matchingFilters = inventory.filter((p) => {
+      const matchesCategory = selectedCategoryId == null || String(p.categoryId) === String(selectedCategoryId);
+      const matchesGroup =
+        groupFilter === "todos" ||
+        (groupFilter === "sin-grupo" && !p.priceGroupId) ||
+        (groupFilter === "proveedores" && p.priceGroupType === "proveedor") ||
+        (groupFilter === "colecciones" && p.priceGroupType === "coleccion") ||
+        String(p.priceGroupId) === String(groupFilter);
+      return matchesCategory && matchesGroup;
+    });
+    return term ? searchProducts(matchingFilters, searchTerm) : matchingFilters.sort((a, b) => byNameEs(a.name, b.name));
+  }, [inventory, searchTerm, selectedCategoryId, groupFilter]);
 
   const filteredRows = useMemo(() => {
     const term = normalizeSearch(searchTerm);
     const code = searchTerm.trim();
-    const promotionRows = selectedCategory === "Todos" && groupFilter === "todos"
+    const promotionRows = selectedCategoryId == null && groupFilter === "todos"
       ? promotions
         .filter((promotion) => !term || normalizeSearch(`${promotion.name} ${promotion.description || ""}`).includes(term) || promotion.items.some((item) => normalizeSearch(item.name).includes(term) || String(item.codbarra || "").includes(code)))
         .map((promotion) => ({ ...promotion, rowType: "promotion", rowId: `promotion-${promotion.id}` }))
       : [];
-    return [...filteredInventory.map((product) => ({ ...product, rowType: "product", rowId: `product-${product.id}` })), ...promotionRows]
-      .sort((a, b) => byNameEs(a.name, b.name));
-  }, [filteredInventory, promotions, searchTerm, selectedCategory, groupFilter]);
+    const rows = [...filteredInventory.map((product) => ({ ...product, rowType: "product", rowId: `product-${product.id}` })), ...promotionRows];
+    return term ? rows : rows.sort((a, b) => byNameEs(a.name, b.name));
+  }, [filteredInventory, promotions, searchTerm, selectedCategoryId, groupFilter]);
 
-  useEffect(() => { setPage(1); }, [searchTerm, selectedCategory, groupFilter]);
+  useEffect(() => { setPage(1); }, [searchTerm, selectedCategoryId, groupFilter]);
+
+  useEffect(() => {
+    setActiveCategoryIndex(categoryQuery && categoryFilterOptions.length > 0 ? 1 : 0);
+  }, [categoryQuery, categoryFilterOptions.length]);
+
+  useEffect(() => {
+    if (!categoryMenuOpen) return;
+    document.getElementById(`category-filter-option-${activeCategoryOptionIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [categoryMenuOpen, activeCategoryOptionIndex]);
 
   const paged = paginate(filteredRows, page);
   const lowStockItems = useMemo(
@@ -430,6 +434,41 @@ export function InventarioView() {
     ? Number(productModal.item.priceGroupId)
     : "";
 
+  const selectCategoryFilter = (category) => {
+    setSelectedCategoryId(category?.id ?? null);
+    setCategoryQuery("");
+    setCategoryMenuOpen(false);
+  };
+
+  const handleCategoryKeyDown = (event) => {
+    const optionCount = categoryFilterOptions.length + 1;
+
+    if (event.key === "Escape") {
+      setCategoryMenuOpen(false);
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setCategoryMenuOpen(true);
+      setActiveCategoryIndex((current) => Math.min(current + 1, optionCount - 1));
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setCategoryMenuOpen(true);
+      setActiveCategoryIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+
+    if (event.key === "Enter" && categoryMenuOpen) {
+      event.preventDefault();
+      if (categoryQuery && categoryFilterOptions.length === 0) return;
+      selectCategoryFilter(activeCategoryOptionIndex === 0 ? null : categoryFilterOptions[activeCategoryOptionIndex - 1]);
+    }
+  };
+
   return (
     <div className="flex-1 min-w-0 p-4 pb-20 md:p-8 overflow-y-auto relative">
       {loading && <Loader />}
@@ -529,38 +568,72 @@ export function InventarioView() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
         <div>
-          <label className="text-foreground/80 font-bold text-sm block mb-2">Categoría</label>
+          <label htmlFor="category-filter" className="text-foreground/80 font-bold text-sm block mb-2">Categoría</label>
           <div
             className="relative"
             onBlur={(event) => {
               if (!event.currentTarget.contains(event.relatedTarget)) setCategoryMenuOpen(false);
             }}
           >
-            <button
-              type="button"
-              onClick={() => { setCategoryMenuOpen((current) => !current); setCategoryQuery(""); }}
-              aria-expanded={categoryMenuOpen}
-              className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm flex items-center justify-between gap-3"
-            >
-              <span className="truncate">{selectedCategory === "Todos" ? "Todas las categorías" : selectedCategory}</span>
-              <ChevronDown size={18} className={`shrink-0 transition-transform ${categoryMenuOpen ? "rotate-180" : ""}`} />
-            </button>
+            <div className="relative">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/60" size={18} aria-hidden="true" />
+              <input
+                id="category-filter"
+                type="text"
+                role="combobox"
+                autoComplete="off"
+                value={categoryQuery}
+                onFocus={() => setCategoryMenuOpen(true)}
+                onClick={() => setCategoryMenuOpen(true)}
+                onChange={(event) => { setCategoryQuery(event.target.value); setCategoryMenuOpen(true); }}
+                onKeyDown={handleCategoryKeyDown}
+                aria-expanded={categoryMenuOpen}
+                aria-controls="category-filter-listbox"
+                aria-activedescendant={categoryMenuOpen ? `category-filter-option-${activeCategoryOptionIndex}` : undefined}
+                aria-autocomplete="list"
+                placeholder="Buscar categoría..."
+                className="w-full bg-surface text-foreground placeholder-foreground/60 font-medium rounded-xl pl-11 pr-4 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+              />
+            </div>
+            {selectedCategory && (
+              <div className="mt-2 flex items-center justify-between gap-2 text-sm">
+                <span className="min-w-0 truncate text-foreground/75 font-medium">Seleccionada: <strong className="text-foreground">{selectedCategory.name}</strong></span>
+                <button
+                  type="button"
+                  onClick={() => selectCategoryFilter(null)}
+                  className="shrink-0 rounded-md px-2 py-1 text-primary font-bold hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  Limpiar
+                </button>
+              </div>
+            )}
             {categoryMenuOpen && (
-              <div className="absolute z-30 mt-2 w-full rounded-xl border border-foreground/15 bg-background p-2 shadow-2xl">
-                <div className="relative mb-2">
-                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground/50" />
-                  <input
-                    autoFocus
-                    value={categoryQuery}
-                    onChange={(event) => setCategoryQuery(event.target.value)}
-                    placeholder="Buscar categoría..."
-                    className="w-full rounded-lg border border-foreground/15 bg-surface py-2.5 pl-9 pr-3 text-sm font-medium text-foreground outline-none focus:border-primary"
-                  />
-                </div>
-                <div className="max-h-60 overflow-y-auto space-y-1">
-                  <button type="button" onClick={() => { setSelectedCategory("Todos"); setCategoryMenuOpen(false); }} className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold ${selectedCategory === "Todos" ? "bg-primary/15 text-primary" : "hover:bg-surface"}`}>Todas las categorías</button>
-                  {categoryFilterOptions.map((category) => (
-                    <button key={category.id} type="button" onClick={() => { setSelectedCategory(category.name); setCategoryMenuOpen(false); }} className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold ${selectedCategory === category.name ? "bg-primary/15 text-primary" : "hover:bg-surface"}`}>{category.name}</button>
+              <div className="z-30 mt-2 w-full rounded-xl border border-foreground/15 bg-background p-2 shadow-2xl sm:absolute">
+                <div id="category-filter-listbox" role="listbox" aria-label="Resultados de categorías" className="max-h-[min(15rem,calc(100vh-14rem))] overflow-y-auto space-y-1">
+                  <button
+                    id="category-filter-option-0"
+                    type="button"
+                    role="option"
+                    aria-selected={selectedCategoryId == null}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectCategoryFilter(null)}
+                    className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold outline-none focus:ring-2 focus:ring-primary/30 ${selectedCategoryId == null ? "bg-primary/15 text-primary" : "hover:bg-surface"} ${activeCategoryOptionIndex === 0 ? "ring-2 ring-primary/30" : ""}`}
+                  >
+                    Todas las categorías
+                  </button>
+                  {categoryFilterOptions.map((category, index) => (
+                    <button
+                      key={category.id}
+                      id={`category-filter-option-${index + 1}`}
+                      type="button"
+                      role="option"
+                      aria-selected={String(selectedCategoryId) === String(category.id)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => selectCategoryFilter(category)}
+                      className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold outline-none focus:ring-2 focus:ring-primary/30 ${String(selectedCategoryId) === String(category.id) ? "bg-primary/15 text-primary" : "hover:bg-surface"} ${activeCategoryOptionIndex === index + 1 ? "ring-2 ring-primary/30" : ""}`}
+                    >
+                      {category.name}
+                    </button>
                   ))}
                   {categoryFilterOptions.length === 0 && <p className="px-3 py-4 text-center text-sm text-foreground/60">No se encontraron categorías</p>}
                 </div>
@@ -601,6 +674,19 @@ export function InventarioView() {
         <p className="mb-4 text-sm font-medium text-foreground/70">
           {filteredRows.length} resultado{filteredRows.length === 1 ? "" : "s"} para “{searchTerm.trim()}”
         </p>
+      )}
+
+      {searchTerm.trim() && filteredRows.length === 0 && (selectedCategoryId != null || groupFilter !== "todos") && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 text-sm text-foreground/80">
+          <span className="font-medium">Revisá los filtros activos: pueden estar ocultando productos.</span>
+          <button
+            type="button"
+            onClick={() => { setSelectedCategoryId(null); setGroupFilter("todos"); }}
+            className="text-primary font-bold hover:underline focus:outline-none focus:ring-2 focus:ring-primary/30 rounded"
+          >
+            Limpiar filtros
+          </button>
+        </div>
       )}
 
       {selectedIds.length > 0 && (
