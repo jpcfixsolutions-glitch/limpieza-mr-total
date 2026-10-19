@@ -186,3 +186,39 @@ test("flujos multiunidad, idempotencia, reversiones y concurrencia", async (t) =
     assert.equal(warehouseStats.stockUnits, (await stock(2, 1)) + (await stock(2, 2)));
   });
 });
+
+test("la baja lógica oculta el catálogo de una sola unidad y conserva el historial", async () => {
+  const historicalItems = await client.execute("SELECT count(*) AS n FROM transaction_items WHERE product_id = 1");
+  assert.ok(Number(historicalItems.rows[0].n) > 0, "la prueba parte de un producto con ventas históricas");
+
+  const result = await ProductService.remove(1, local);
+  assert.match(result.message, /baja lógica/i);
+  assert.equal((await ProductService.getAll(local)).some((product) => product.id === 1), false);
+  assert.equal((await ProductService.getAll(warehouse)).some((product) => product.id === 1), true);
+  await assert.rejects(() => ProductService.getByCodbarra("1", local), (error) => error.status === 404);
+  assert.equal((await ProductService.getByCodbarra("1", warehouse)).id, 1);
+
+  const localInventory = await client.execute("SELECT is_available FROM business_unit_products WHERE business_unit_id = 1 AND product_id = 1");
+  const warehouseInventory = await client.execute("SELECT is_available FROM business_unit_products WHERE business_unit_id = 2 AND product_id = 1");
+  const historyAfter = await client.execute("SELECT count(*) AS n FROM transaction_items WHERE product_id = 1");
+  assert.equal(Number(localInventory.rows[0].is_available), 0);
+  assert.equal(Number(warehouseInventory.rows[0].is_available), 1);
+  assert.equal(Number(historyAfter.rows[0].n), Number(historicalItems.rows[0].n));
+
+  await assert.doesNotReject(() => ProductService.remove(1, local), "la baja repetida es idempotente");
+});
+
+test("la baja de un producto migrado sin fila de inventario crea una baja controlada", async () => {
+  await client.execute("INSERT INTO products (id, name, cod_barra, category_id, price_group_id, pack_type_id, cost, price, units_per_pack, pack_price, use_suggested_price, suggested_price_percent, stock, min_stock, icon, is_available, created_at) VALUES (3, 'Producto migrado', '3', 1, NULL, NULL, 7, 20, 1, NULL, 0, NULL, 2, 1, 'Package', 1, NULL)");
+  await client.execute("INSERT INTO transaction_items (transaction_id, product_id, product_name, unit_cost, category_name, price, quantity, total, sale_mode, pack_size) VALUES (1, 3, 'Producto migrado', 7, 'General', 20, 1, 20, 'unitario', 1)");
+
+  assert.equal((await ProductService.getAll(local)).some((product) => product.id === 3), true);
+  await ProductService.remove(3, local);
+  assert.equal((await ProductService.getAll(local)).some((product) => product.id === 3), false);
+  assert.equal((await ProductService.getAll(warehouse)).some((product) => product.id === 3), true);
+
+  const inventory = await client.execute("SELECT is_available FROM business_unit_products WHERE business_unit_id = 1 AND product_id = 3");
+  const historical = await client.execute("SELECT product_name FROM transaction_items WHERE product_id = 3");
+  assert.equal(Number(inventory.rows[0].is_available), 0);
+  assert.equal(historical.rows[0].product_name, "Producto migrado");
+});

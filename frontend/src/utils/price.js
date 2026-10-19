@@ -24,6 +24,20 @@ export function calculateProfitabilityPercent(cost, price) {
   return ((numericPrice - numericCost) / numericCost) * 100;
 }
 
+// A wholesale price is optional. Treat an empty or zero value as "not set",
+// instead of presenting the mathematically correct but misleading -100%.
+export function calculateOptionalProfitabilityPercent(cost, price) {
+  if (price === "" || price === null || price === undefined || Number(price) <= 0) return null;
+  return calculateProfitabilityPercent(cost, price);
+}
+
+export function calculateProductProfitabilities(cost, price, wholesalePrice) {
+  return {
+    retail: calculateProfitabilityPercent(cost, price),
+    wholesale: calculateOptionalProfitabilityPercent(cost, wholesalePrice),
+  };
+}
+
 export function calculatePriceForProfitability(cost, percentage) {
   if (cost === "" || cost === null || cost === undefined || percentage === "" || percentage === null || percentage === undefined) return Number.NaN;
   const numericCost = Number(cost);

@@ -5,12 +5,12 @@ import { toast } from "sonner";
 import api from "../../services/api.js";
 import { useBarcodeScanner } from "../hooks/useBarcodeScanner.js";
 import { formatStock, hasPackSale, packTypeLabel } from "../../utils/pack.js";
-import { calculatePriceForProfitability, calculateProfitabilityPercent, formatCatalogPrice, roundPriceInput } from "../../utils/price.js";
+import { calculateOptionalProfitabilityPercent, calculatePriceForProfitability, calculateProductProfitabilities, calculateProfitabilityPercent, formatCatalogPrice, roundPriceInput } from "../../utils/price.js";
 import { PaginationBar, paginate, byNameEs } from "./PaginationBar.jsx";
 import { PromotionModal } from "./PromotionModal.jsx";
 import { ProductExtractionModal } from "./ProductExtractionModal.jsx";
 
-const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", wholesalePrice: "", cost: "", targetProfitability: "40", categoryId: null, priceGroupId: null, stock: "", minStock: "", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
+const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", wholesalePrice: "", cost: "", targetProfitability: "40", targetWholesaleProfitability: "", categoryId: null, priceGroupId: null, stock: "", minStock: "", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
 const PRODUCT_DRAFT_STORAGE_KEY = "descartables-yofre:product-draft";
 
 function normalizeSearch(value) {
@@ -68,7 +68,7 @@ function isRequestTimeout(error) {
 }
 
 function toModalItem(product) {
-  const profitability = calculateProfitabilityPercent(product.cost, product.price);
+  const { retail: profitability, wholesale: wholesaleProfitability } = calculateProductProfitabilities(product.cost, product.price, product.wholesalePrice);
   return {
     ...product,
     codbarra: product.codbarra || "",
@@ -76,6 +76,7 @@ function toModalItem(product) {
     wholesalePrice: product.wholesalePrice != null ? String(product.wholesalePrice) : "",
     cost: String(product.cost ?? ""),
     targetProfitability: profitability == null ? "" : profitability.toFixed(2),
+    targetWholesaleProfitability: wholesaleProfitability == null ? "" : wholesaleProfitability.toFixed(2),
     stock: String(product.stock),
     minStock: String(product.minStock),
     priceGroupId: product.priceGroupId ?? null,
@@ -301,10 +302,15 @@ export function InventarioView() {
     if (!deleteModal.product || deleting) return;
     setDeleting(true);
     try {
-      await api.delete(`/products/${deleteModal.product.id}`);
-      toast.success(`"${deleteModal.product.name}" eliminado`);
+      const removed = deleteModal.product;
+      await api.delete(`/products/${removed.id}`);
+      setInventory((current) => current.filter((product) => product.id !== removed.id));
+      setSelectedIds((current) => current.filter((id) => id !== removed.id));
+      setProductModal((current) => current.item?.id === removed.id
+        ? { isOpen: false, item: null, isNew: false }
+        : current);
+      toast.success(`"${removed.name}" dado de baja del catálogo`);
       setDeleteModal({ isOpen: false, product: null });
-      fetchData();
     } catch (err) {
       toast.error(err.response?.data?.message || "Error al eliminar el producto");
     } finally {
@@ -666,6 +672,7 @@ export function InventarioView() {
                 const noStock = product.stock === 0;
                 const lowStock = !noStock && product.stock <= product.minStock;
                 const profitability = calculateProfitabilityPercent(product.cost, product.price);
+                const wholesaleProfitability = calculateOptionalProfitabilityPercent(product.cost, product.wholesalePrice);
                 return (
                   <tr key={product.id} className="border-b border-foreground/15 hover:bg-background/50 transition-colors">
                     <td className="p-4">
@@ -724,7 +731,8 @@ export function InventarioView() {
                     <td className="p-4 whitespace-nowrap">
                       {profitability == null
                         ? <span className="text-foreground/50 font-medium text-sm">Sin costo</span>
-                        : <span className={`font-black ${profitability >= 40 ? "text-success" : profitability >= 0 ? "text-yellow-700" : "text-red-600"}`}>{profitability.toFixed(2)}%</span>}
+                        : <span className={`font-black block ${profitability >= 40 ? "text-success" : profitability >= 0 ? "text-yellow-700" : "text-red-600"}`}>Minorista: {profitability.toFixed(2)}%</span>}
+                      {wholesaleProfitability != null && <span className={`font-bold text-xs block ${wholesaleProfitability >= 40 ? "text-success" : wholesaleProfitability >= 0 ? "text-yellow-700" : "text-red-600"}`}>Mayorista: {wholesaleProfitability.toFixed(2)}%</span>}
                     </td>
                     <td className="p-4 whitespace-nowrap">
                       <span className="text-foreground font-bold">{formatStock(product.stock, product.unitsPerPack, packTypeLabel(product))}</span>
@@ -848,7 +856,8 @@ export function InventarioView() {
                       const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
                       setProductModal((prev) => {
                         const profitability = calculateProfitabilityPercent(val, prev.item.price);
-                        return { ...prev, item: { ...prev.item, cost: val, targetProfitability: profitability == null ? prev.item.targetProfitability : profitability.toFixed(2) } };
+                        const wholesaleProfitability = calculateOptionalProfitabilityPercent(val, prev.item.wholesalePrice);
+                        return { ...prev, item: { ...prev.item, cost: val, targetProfitability: profitability == null ? "" : profitability.toFixed(2), targetWholesaleProfitability: wholesaleProfitability == null ? "" : wholesaleProfitability.toFixed(2) } };
                       });
                     }}
                     onFocus={(e) => e.target.select()}
@@ -867,13 +876,13 @@ export function InventarioView() {
                       const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
                       setProductModal((prev) => {
                         const profitability = calculateProfitabilityPercent(prev.item.cost, val);
-                        return { ...prev, item: { ...prev.item, price: val, targetProfitability: profitability == null ? prev.item.targetProfitability : profitability.toFixed(2) } };
+                        return { ...prev, item: { ...prev.item, price: val, targetProfitability: profitability == null ? "" : profitability.toFixed(2) } };
                       });
                     }}
                     onBlur={(e) => setProductModal((prev) => {
                       const price = roundPriceInput(e.target.value);
                       const profitability = calculateProfitabilityPercent(prev.item.cost, price);
-                      return { ...prev, item: { ...prev.item, price, targetProfitability: profitability == null ? prev.item.targetProfitability : profitability.toFixed(2) } };
+                      return { ...prev, item: { ...prev.item, price, targetProfitability: profitability == null ? "" : profitability.toFixed(2) } };
                     })}
                     onFocus={(e) => e.target.select()}
                     placeholder="0"
@@ -889,16 +898,23 @@ export function InventarioView() {
                     value={productModal.item.wholesalePrice ?? ""}
                     onChange={(e) => {
                       const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
-                      setProductModal((prev) => ({ ...prev, item: { ...prev.item, wholesalePrice: val } }));
+                      setProductModal((prev) => {
+                        const profitability = calculateOptionalProfitabilityPercent(prev.item.cost, val);
+                        return { ...prev, item: { ...prev.item, wholesalePrice: val, targetWholesaleProfitability: profitability == null ? "" : profitability.toFixed(2) } };
+                      });
                     }}
-                    onBlur={(e) => setProductModal((prev) => ({ ...prev, item: { ...prev.item, wholesalePrice: roundPriceInput(e.target.value) } }))}
+                    onBlur={(e) => setProductModal((prev) => {
+                      const wholesalePrice = roundPriceInput(e.target.value);
+                      const profitability = calculateOptionalProfitabilityPercent(prev.item.cost, wholesalePrice);
+                      return { ...prev, item: { ...prev.item, wholesalePrice, targetWholesaleProfitability: profitability == null ? "" : profitability.toFixed(2) } };
+                    })}
                     onFocus={(e) => e.target.select()}
                     placeholder="0"
                     className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
                   />
                 </div>
                 <div>
-                  <label className="text-foreground/80 font-bold text-sm block mb-2">Rentabilidad (%)</label>
+                  <label className="text-foreground/80 font-bold text-sm block mb-2">Rentabilidad minorista (%)</label>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -909,6 +925,25 @@ export function InventarioView() {
                       setProductModal((prev) => {
                         const price = calculatePriceForProfitability(prev.item.cost, val);
                         return { ...prev, item: { ...prev.item, targetProfitability: val, price: Number.isFinite(price) ? String(price) : prev.item.price } };
+                      });
+                    }}
+                    onFocus={(e) => e.target.select()}
+                    placeholder="40"
+                    className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="text-foreground/80 font-bold text-sm block mb-2">Rentabilidad mayorista (%)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={productModal.item.targetWholesaleProfitability ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
+                      setProductModal((prev) => {
+                        const wholesalePrice = calculatePriceForProfitability(prev.item.cost, val);
+                        return { ...prev, item: { ...prev.item, targetWholesaleProfitability: val, wholesalePrice: Number.isFinite(wholesalePrice) ? String(wholesalePrice) : prev.item.wholesalePrice } };
                       });
                     }}
                     onFocus={(e) => e.target.select()}

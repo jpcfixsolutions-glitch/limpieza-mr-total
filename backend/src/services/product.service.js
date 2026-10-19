@@ -347,18 +347,27 @@ export const ProductService = {
   },
 
   async remove(id, businessUnit = null) {
-    const product = businessUnit?.id
-      ? await ProductModel.findByIdForUnit(Number(id), businessUnit.id)
-      : await ProductModel.findById(id);
-    if (!product) throw { status: 404, message: "Producto no encontrado." };
-    if (businessUnit?.id) {
-      await db.update(businessUnitProducts).set({ isAvailable: false, updatedAt: getArgentinaTime().datetime })
-        .where(and(eq(businessUnitProducts.businessUnitId, businessUnit.id), eq(businessUnitProducts.productId, Number(id))));
-      if (businessUnit.code === "LOCAL") await db.update(products).set({ isAvailable: false }).where(eq(products.id, Number(id)));
-      return { message: "Producto desactivado para la unidad." };
+    if (!businessUnit?.id) {
+      throw { status: 400, message: "Se requiere una unidad de negocio para dar de baja un producto." };
     }
-    await ProductModel.remove(id);
-    return { message: "Producto eliminado." };
+    const product = await ProductModel.findByIdForUnitIncludingInactive(Number(id), businessUnit.id);
+    if (!product) throw { status: 404, message: "Producto no encontrado." };
+    await db.insert(businessUnitProducts).values({
+      businessUnitId: businessUnit.id,
+      productId: Number(id),
+      stock: Number(product.stock) || 0,
+      minStock: Number(product.minStock) || 0,
+      cost: Number(product.cost) || 0,
+      salePrice: Number(product.price) || 0,
+      wholesalePrice: Number(product.wholesalePrice) || 0,
+      isAvailable: false,
+      fulfillmentMode: product.fulfillmentMode === "WAREHOUSE_DIRECT" ? "WAREHOUSE_DIRECT" : "OWN_STOCK",
+      updatedAt: getArgentinaTime().datetime,
+    }).onConflictDoUpdate({
+      target: [businessUnitProducts.businessUnitId, businessUnitProducts.productId],
+      set: { isAvailable: false, updatedAt: getArgentinaTime().datetime },
+    });
+    return { message: "Producto dado de baja lógicamente para esta unidad." };
   },
 
   async decrementStock(productId, quantity) {

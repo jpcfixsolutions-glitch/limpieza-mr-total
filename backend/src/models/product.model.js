@@ -1,4 +1,4 @@
-import { and, eq, count, asc, sql } from "drizzle-orm";
+import { and, eq, count, asc, sql, or, isNull } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   products,
@@ -109,7 +109,9 @@ export const ProductModel = {
       .leftJoin(businessUnitProducts, and(
         eq(businessUnitProducts.productId, products.id),
         eq(businessUnitProducts.businessUnitId, businessUnitId)
-      ))).orderBy(asc(products.name));
+      )))
+      .where(or(isNull(businessUnitProducts.id), eq(businessUnitProducts.isAvailable, true)))
+      .orderBy(asc(products.name));
   },
 
   findByIdForUnit(id, businessUnitId) {
@@ -118,7 +120,8 @@ export const ProductModel = {
         eq(businessUnitProducts.productId, products.id),
         eq(businessUnitProducts.businessUnitId, businessUnitId)
       )))
-      .where(eq(products.id, id)).then((rows) => rows[0]);
+      .where(and(eq(products.id, id), or(isNull(businessUnitProducts.id), eq(businessUnitProducts.isAvailable, true))))
+      .then((rows) => rows[0]);
   },
 
   findByCodbarraForUnit(codbarra, businessUnitId) {
@@ -127,7 +130,19 @@ export const ProductModel = {
         eq(businessUnitProducts.productId, products.id),
         eq(businessUnitProducts.businessUnitId, businessUnitId)
       )))
-      .where(eq(products.codbarra, codbarra)).then((rows) => rows[0]);
+      .where(and(eq(products.codbarra, codbarra), or(isNull(businessUnitProducts.id), eq(businessUnitProducts.isAvailable, true))))
+      .then((rows) => rows[0]);
+  },
+
+  // Used only by logical deletion so repeated requests and legacy products
+  // without an inventory row can be resolved without exposing them as active.
+  findByIdForUnitIncludingInactive(id, businessUnitId) {
+    return withJoins(db.select(contextualFields()).from(products)
+      .leftJoin(businessUnitProducts, and(
+        eq(businessUnitProducts.productId, products.id),
+        eq(businessUnitProducts.businessUnitId, businessUnitId)
+      )))
+      .where(eq(products.id, id)).then((rows) => rows[0]);
   },
 
   findByPriceGroupId(priceGroupId) {
