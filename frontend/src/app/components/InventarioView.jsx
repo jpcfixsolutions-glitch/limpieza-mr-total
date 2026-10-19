@@ -83,6 +83,102 @@ function toModalItem(product) {
   };
 }
 
+function ProductCategoryCombobox({ categories, value, onChange }) {
+  const [query, setQuery] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const matches = useMemo(() => filterCategories(categories, query), [categories, query]);
+  const selectedCategory = useMemo(
+    () => categories.find((category) => String(category.id) === String(value)) || null,
+    [categories, value]
+  );
+  const safeActiveIndex = Math.min(activeIndex, matches.length);
+
+  useEffect(() => {
+    setActiveIndex(query && matches.length > 0 ? 1 : 0);
+  }, [query, matches.length]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    document.getElementById(`product-category-option-${safeActiveIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [isOpen, safeActiveIndex]);
+
+  const selectCategory = (category) => {
+    onChange(category?.id ?? null);
+    setQuery("");
+    setIsOpen(false);
+  };
+
+  const handleKeyDown = (event) => {
+    const optionCount = matches.length + 1;
+    if (event.key === "Escape") {
+      setIsOpen(false);
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setIsOpen(true);
+      setActiveIndex((current) => Math.min(current + 1, optionCount - 1));
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setIsOpen(true);
+      setActiveIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+    if (event.key === "Enter" && isOpen) {
+      event.preventDefault();
+      if (query && matches.length === 0) return;
+      selectCategory(safeActiveIndex === 0 ? null : matches[safeActiveIndex - 1]);
+    }
+  };
+
+  return (
+    <div className="relative" onBlur={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget)) setIsOpen(false);
+    }}>
+      <div className="relative">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/60" size={18} aria-hidden="true" />
+        <input
+          id="product-category"
+          type="text"
+          role="combobox"
+          autoComplete="off"
+          value={query}
+          onFocus={() => setIsOpen(true)}
+          onClick={() => setIsOpen(true)}
+          onChange={(event) => { setQuery(event.target.value); setIsOpen(true); }}
+          onKeyDown={handleKeyDown}
+          aria-expanded={isOpen}
+          aria-controls="product-category-listbox"
+          aria-activedescendant={isOpen ? `product-category-option-${safeActiveIndex}` : undefined}
+          aria-autocomplete="list"
+          placeholder="Buscar categoría..."
+          className="w-full bg-surface text-foreground placeholder-foreground/60 font-medium rounded-xl pl-11 pr-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+        />
+      </div>
+      {selectedCategory && (
+        <div className="mt-2 flex items-center justify-between gap-2 text-sm">
+          <span className="min-w-0 truncate text-foreground/75 font-medium">Seleccionada: <strong className="text-foreground">{selectedCategory.name}</strong></span>
+          <button type="button" onClick={() => selectCategory(null)} className="shrink-0 rounded-md px-2 py-1 text-primary font-bold hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30">Limpiar</button>
+        </div>
+      )}
+      {isOpen && (
+        <div className="z-40 mt-2 w-full rounded-xl border border-foreground/15 bg-background p-2 shadow-2xl sm:absolute">
+          <div id="product-category-listbox" role="listbox" aria-label="Resultados de categorías" className="max-h-[min(15rem,calc(100vh-14rem))] overflow-y-auto space-y-1">
+            <button id="product-category-option-0" type="button" role="option" aria-selected={value == null} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCategory(null)} className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold outline-none focus:ring-2 focus:ring-primary/30 ${value == null ? "bg-primary/15 text-primary" : "hover:bg-surface"} ${safeActiveIndex === 0 ? "ring-2 ring-primary/30" : ""}`}>Sin categoría</button>
+            {matches.map((category, index) => (
+              <button key={category.id} id={`product-category-option-${index + 1}`} type="button" role="option" aria-selected={String(value) === String(category.id)} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCategory(category)} className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold outline-none focus:ring-2 focus:ring-primary/30 ${String(value) === String(category.id) ? "bg-primary/15 text-primary" : "hover:bg-surface"} ${safeActiveIndex === index + 1 ? "ring-2 ring-primary/30" : ""}`}>{category.name}</button>
+            ))}
+            {matches.length === 0 && <p className="px-3 py-4 text-center text-sm text-foreground/60">No se encontraron categorías</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function InventarioView() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState(null);
@@ -887,17 +983,15 @@ export function InventarioView() {
                 </div>
               ))}
               <div>
-                <label className="text-foreground/80 font-bold text-sm block mb-2">Categoría</label>
-                <select
+                <label htmlFor="product-category" className="text-foreground/80 font-bold text-sm block mb-2">Categoría</label>
+                <ProductCategoryCombobox
+                  categories={sortedCategories}
                   value={productModal.item.categoryId ?? ""}
-                  onChange={(e) => setProductModal((prev) => ({
+                  onChange={(categoryId) => setProductModal((prev) => ({
                     ...prev,
-                    item: { ...prev.item, categoryId: e.target.value ? Number(e.target.value) : null },
+                    item: { ...prev.item, categoryId: categoryId == null ? null : Number(categoryId) },
                   }))}
-                  className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
-                >
-                  {sortedCategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
