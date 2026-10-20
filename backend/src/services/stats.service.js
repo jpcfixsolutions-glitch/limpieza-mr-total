@@ -25,6 +25,85 @@ import { CustomerModel } from "../models/customer.model.js";
 import { getArgentinaTime } from "../db/timeUtils.js";
 import { adjustInventoryInTransaction } from "./inventory.service.js";
 
+export function buildTopProducts(items, limit = 10) {
+  const totals = new Map();
+
+  const addMetrics = ({ productId, productName, quantity, revenue, cost, hasCost = true }) => {
+    const units = Number(quantity) || 0;
+    if (units <= 0) return;
+    const key = productId != null ? `product-${productId}` : `name-${productName}`;
+    const current = totals.get(key) || {
+      productId: productId || null,
+      productName: productName || "Producto",
+      quantitySold: 0,
+      netRevenue: 0,
+      totalCost: 0,
+      hasCost: true,
+    };
+    current.quantitySold += units;
+    current.netRevenue += Number(revenue) || 0;
+    current.totalCost += Number(cost) || 0;
+    current.hasCost = current.hasCost && hasCost;
+    totals.set(key, current);
+  };
+
+  for (const item of items) {
+    if (item.promotionComposition) {
+      try {
+        const composition = JSON.parse(item.promotionComposition);
+        const components = Array.isArray(composition) ? composition : [];
+        const promotionQuantity = Number(item.quantity) || 0;
+        const compositionCost = components.reduce(
+          (sum, component) => sum + (Number(component.unitCost) || 0) * (Number(component.quantity) || 0) * promotionQuantity,
+          0,
+        );
+        const compositionUnits = components.reduce(
+          (sum, component) => sum + (Number(component.quantity) || 0) * promotionQuantity,
+          0,
+        );
+
+        for (const component of components) {
+          const units = (Number(component.quantity) || 0) * promotionQuantity;
+          const cost = (Number(component.unitCost) || 0) * units;
+          const share = compositionCost > 0 ? cost / compositionCost : compositionUnits > 0 ? units / compositionUnits : 0;
+          addMetrics({
+            productId: component.productId,
+            productName: component.name,
+            quantity: units,
+            revenue: (Number(item.total) || 0) * share,
+            cost,
+            hasCost: component.unitCost != null,
+          });
+        }
+      } catch {
+        // Una composición histórica inválida no debe impedir el resto del ranking.
+      }
+    } else {
+      addMetrics({
+        productId: item.productId,
+        productName: item.productName,
+        quantity: (Number(item.quantity) || 0) * Number(item.packSize || 1),
+        revenue: item.total,
+        cost: item.unitCost == null ? 0 : Number(item.unitCost) * Number(item.quantity),
+        hasCost: item.unitCost != null,
+      });
+    }
+  }
+
+  const safeLimit = Math.min(10, Math.max(1, Number(limit) || 10));
+  return [...totals.values()]
+    .map(({ hasCost, ...row }) => {
+      const totalProfit = row.netRevenue - row.totalCost;
+      return {
+        ...row,
+        totalProfit,
+        profitability: hasCost && row.totalCost > 0 ? (totalProfit / row.totalCost) * 100 : null,
+      };
+    })
+    .sort((a, b) => b.quantitySold - a.quantitySold || a.productName.localeCompare(b.productName, "es"))
+    .slice(0, safeLimit);
+}
+
 export const StatsService = {
   async getProfitability({ from, to, productId, categoryId } = {}, businessUnit = null) {
     const conditions = [];
@@ -64,7 +143,7 @@ export const StatsService = {
     return { restockCost: Number(profitability.summary.totalCost || 0) };
   },
 
-  async getTopProducts({ from, to, limit = 3 } = {}, businessUnit = null) {
+  async getTopProducts({ from, to, limit = 10 } = {}, businessUnit = null) {
     const conditions = [eq(transactions.status, "completed")];
     if (from) conditions.push(gte(transactions.createdAt, `${from} 00:00:00`));
     if (to) conditions.push(lte(transactions.createdAt, `${to} 23:59:59`));
@@ -75,40 +154,14 @@ export const StatsService = {
       productName: transactionItems.productName,
       quantity: transactionItems.quantity,
       packSize: transactionItems.packSize,
+      unitCost: transactionItems.unitCost,
+      total: transactionItems.total,
       promotionComposition: transactionItems.promotionComposition,
     }).from(transactionItems)
       .innerJoin(transactions, eq(transactionItems.transactionId, transactions.id))
       .where(and(...conditions));
 
-    const totals = new Map();
-    const addUnits = (productId, productName, quantity) => {
-      const units = Number(quantity) || 0;
-      if (units <= 0) return;
-      const key = productId != null ? `product-${productId}` : `name-${productName}`;
-      const current = totals.get(key) || { productId: productId || null, productName: productName || "Producto", quantitySold: 0 };
-      current.quantitySold += units;
-      totals.set(key, current);
-    };
-
-    for (const item of items) {
-      if (item.promotionComposition) {
-        try {
-          const composition = JSON.parse(item.promotionComposition);
-          for (const component of Array.isArray(composition) ? composition : []) {
-            addUnits(component.productId, component.name, Number(component.quantity) * Number(item.quantity));
-          }
-        } catch {
-          // Una composición histórica inválida no debe impedir el resto del ranking.
-        }
-      } else {
-        addUnits(item.productId, item.productName, Number(item.quantity) * Number(item.packSize || 1));
-      }
-    }
-
-    const safeLimit = Math.min(10, Math.max(1, Number(limit) || 3));
-    return [...totals.values()]
-      .sort((a, b) => b.quantitySold - a.quantitySold || a.productName.localeCompare(b.productName, "es"))
-      .slice(0, safeLimit);
+    return buildTopProducts(items, limit);
   },
 
   async getActivityLog(businessUnit = null) {

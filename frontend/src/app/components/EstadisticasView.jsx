@@ -78,7 +78,7 @@ export function EstadisticasView() {
         api.get("/stats/restock", { params: { from: periodFrom, to: periodTo } }),
         api.get("/stats/activity-log"),
         api.get("/product-extractions/summary", { params: { from: periodFrom, to: periodTo } }),
-        api.get("/stats/top-products", { params: { from: periodFrom, to: periodTo, limit: 3 } }),
+        api.get("/stats/top-products", { params: { from: periodFrom, to: periodTo, limit: 10 } }),
       ]);
       if (rCajas.status   === "fulfilled") setCajasCerradas(rCajas.value.data);
       if (rFijos.status   === "fulfilled") setGastosFijos(rFijos.value.data);
@@ -142,6 +142,12 @@ export function EstadisticasView() {
   const totalGastosOperativos = totalFijos + totalDiarios;
   const invertidoStock       = productos.reduce((s, p) => s + ((Number(p.cost)||0) * (Number(p.stock)||0)), 0);
   const profitabilitySummary = summarizeCatalogProfitability(productos);
+  const topProductMaxUnits = Math.max(1, ...topProducts.map((product) => Number(product.quantitySold) || 0));
+  const topProductTotals = topProducts.reduce((totals, product) => ({
+    units: totals.units + (Number(product.quantitySold) || 0),
+    revenue: totals.revenue + (Number(product.netRevenue) || 0),
+    profit: totals.profit + (Number(product.totalProfit) || 0),
+  }), { units: 0, revenue: 0, profit: 0 });
 
   const gastosDiariosEfectivo = gastosDiariosFiltrados.filter((g) => g.method === "efectivo").reduce((s,g)=>s+(Number(g.amount)||0),0);
   const gastosDiariosVirtual  = gastosDiariosFiltrados.filter((g) => g.method === "transferencia").reduce((s,g)=>s+(Number(g.amount)||0),0);
@@ -271,14 +277,44 @@ export function EstadisticasView() {
         </div>
         </>}
         {activePage === "profitability" && <>
-        <div className="bg-surface rounded-xl p-6 border border-primary/30 shadow-sm lg:col-span-2">
-          <div className="flex items-center gap-3 mb-4 text-primary"><Trophy size={20}/><h3 className="text-foreground/80 font-bold">Productos estrella</h3></div>
-          {topProducts.length === 0 ? <p className="text-foreground/60 font-medium text-sm">No hay ventas en este período.</p> : (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="bg-surface rounded-2xl border border-primary/25 shadow-sm overflow-hidden lg:col-span-3">
+          <div className="p-5 md:p-6 border-b border-foreground/10 bg-gradient-to-r from-primary/10 via-surface to-surface">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-11 h-11 rounded-xl bg-primary text-white flex items-center justify-center shadow-sm shrink-0"><Trophy size={22}/></div>
+                <div><div className="flex items-center gap-2 flex-wrap"><h3 className="text-foreground text-lg font-black">Productos estrella</h3><span className="px-2.5 py-1 rounded-full bg-primary/10 text-primary text-[11px] font-black uppercase tracking-wide">Top 10</span></div><p className="text-foreground/60 font-medium text-sm mt-1">Ordenados por unidades vendidas en el período seleccionado</p></div>
+              </div>
+              {topProducts.length > 0 && <div className="grid grid-cols-3 gap-2 md:min-w-[360px]">
+                <div className="rounded-xl bg-background/80 border border-foreground/10 px-3 py-2"><p className="text-[10px] uppercase tracking-wide text-foreground/55 font-bold">Unidades</p><p className="text-base font-black mt-0.5">{topProductTotals.units.toLocaleString("es-AR")}</p></div>
+                <div className="rounded-xl bg-background/80 border border-foreground/10 px-3 py-2"><p className="text-[10px] uppercase tracking-wide text-foreground/55 font-bold">Ventas</p><p className="text-base font-black mt-0.5">${topProductTotals.revenue.toLocaleString("es-AR",{maximumFractionDigits:0})}</p></div>
+                <div className="rounded-xl bg-background/80 border border-foreground/10 px-3 py-2"><p className="text-[10px] uppercase tracking-wide text-foreground/55 font-bold">Ganancia</p><p className={`text-base font-black mt-0.5 ${topProductTotals.profit >= 0 ? "text-success" : "text-red-600"}`}>${topProductTotals.profit.toLocaleString("es-AR",{maximumFractionDigits:0})}</p></div>
+              </div>}
+            </div>
+          </div>
+          {topProducts.length === 0 ? <div className="p-8 text-center"><p className="text-foreground/60 font-medium text-sm">No hay ventas en este período.</p><p className="text-foreground/45 text-xs mt-1">El ranking aparecerá cuando se registren ventas.</p></div> : (
+            <div>
+              <div className="hidden md:grid grid-cols-[52px_minmax(220px,1fr)_110px_140px_140px_120px] gap-4 px-6 py-3 bg-background/70 border-b border-foreground/10 text-[11px] uppercase tracking-wider text-foreground/55 font-black">
+                <span className="text-center">Puesto</span><span>Producto</span><span className="text-right">Unidades</span><span className="text-right">Ventas</span><span className="text-right">Ganancia</span><span className="text-right">Rentabilidad</span>
+              </div>
               {topProducts.map((product, index) => (
-                <div key={product.productId || product.productName} className="rounded-xl bg-background border border-foreground/10 p-4 flex items-center gap-3">
-                  <span className={`w-9 h-9 shrink-0 rounded-full flex items-center justify-center font-black ${index === 0 ? "bg-primary text-foreground" : "bg-surface text-foreground/70"}`}>{index + 1}</span>
-                  <div className="min-w-0"><p className="font-bold text-foreground truncate" title={product.productName}>{product.productName}</p><p className="text-xs text-foreground/60 font-medium">{product.quantitySold} unidad{product.quantitySold === 1 ? "" : "es"} vendida{product.quantitySold === 1 ? "" : "s"}</p></div>
+                <div key={product.productId || product.productName} className="border-b last:border-b-0 border-foreground/10 px-4 md:px-6 py-4 hover:bg-background/60 transition-colors">
+                  <div className="md:grid md:grid-cols-[52px_minmax(220px,1fr)_110px_140px_140px_120px] md:gap-4 md:items-center flex gap-3 items-start">
+                    <span className={`w-10 h-10 md:w-9 md:h-9 shrink-0 rounded-xl flex items-center justify-center font-black ${index === 0 ? "bg-primary text-white shadow-sm" : index === 1 ? "bg-foreground/15 text-foreground" : index === 2 ? "bg-orange-100 text-orange-700" : "bg-background border border-foreground/10 text-foreground/65"}`}>{index + 1}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-foreground truncate" title={product.productName}>{product.productName}</p>
+                      <div className="h-1.5 bg-foreground/10 rounded-full overflow-hidden mt-2"><div className={`h-full rounded-full ${index === 0 ? "bg-primary" : "bg-primary/45"}`} style={{width:`${Math.max(4, (Number(product.quantitySold) / topProductMaxUnits) * 100)}%`}}/></div>
+                    </div>
+                    <div className="hidden md:block text-right"><p className="font-black text-foreground">{Number(product.quantitySold).toLocaleString("es-AR")}</p><p className="text-[10px] text-foreground/50 font-medium">vendidas</p></div>
+                    <p className="hidden md:block text-right font-bold text-foreground">${Number(product.netRevenue).toLocaleString("es-AR",{minimumFractionDigits:2,maximumFractionDigits:2})}</p>
+                    <p className={`hidden md:block text-right font-black ${Number(product.totalProfit) >= 0 ? "text-success" : "text-red-600"}`}>${Number(product.totalProfit).toLocaleString("es-AR",{minimumFractionDigits:2,maximumFractionDigits:2})}</p>
+                    <div className="hidden md:flex justify-end"><span className={`px-2.5 py-1 rounded-full text-xs font-black ${product.profitability == null ? "bg-foreground/10 text-foreground/55" : product.profitability >= 40 ? "bg-success/10 text-success" : product.profitability >= 0 ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-600"}`}>{product.profitability == null ? "Sin costo" : `${Number(product.profitability).toFixed(1)}%`}</span></div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mt-3 ml-[52px] md:hidden">
+                    <div><p className="text-[10px] uppercase tracking-wide text-foreground/50 font-bold">Unidades</p><p className="font-black">{Number(product.quantitySold).toLocaleString("es-AR")}</p></div>
+                    <div><p className="text-[10px] uppercase tracking-wide text-foreground/50 font-bold">Ventas</p><p className="font-bold">${Number(product.netRevenue).toLocaleString("es-AR",{maximumFractionDigits:0})}</p></div>
+                    <div><p className="text-[10px] uppercase tracking-wide text-foreground/50 font-bold">Ganancia</p><p className={`font-black ${Number(product.totalProfit) >= 0 ? "text-success" : "text-red-600"}`}>${Number(product.totalProfit).toLocaleString("es-AR",{maximumFractionDigits:0})}</p></div>
+                    <div><p className="text-[10px] uppercase tracking-wide text-foreground/50 font-bold">Rentabilidad</p><p className="font-black">{product.profitability == null ? "Sin costo" : `${Number(product.profitability).toFixed(1)}%`}</p></div>
+                  </div>
                 </div>
               ))}
             </div>
