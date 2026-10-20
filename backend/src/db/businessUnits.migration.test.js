@@ -37,21 +37,21 @@ before(async () => {
   for (const id of previousIds) await client.execute({ sql: "INSERT INTO app_migrations (id) VALUES (?)", args: [id] });
 });
 
-after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true }); });
+after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 test("la migración conserva los datos históricos y los asigna al Local de forma idempotente", async () => {
   await applyDatabaseMigrations();
   await applyDatabaseMigrations();
   const [units, inventory, transaction, customer, internalCustomer, migrations] = await client.batch([
     "SELECT code FROM business_units ORDER BY code",
-    "SELECT stock, min_stock, cost, sale_price, is_available FROM business_unit_products WHERE product_id = 7 AND business_unit_id = (SELECT id FROM business_units WHERE code = 'LOCAL')",
+    "SELECT stock, min_stock, cost, sale_price, wholesale_price, is_available FROM business_unit_products WHERE product_id = 7 AND business_unit_id = (SELECT id FROM business_units WHERE code = 'LOCAL')",
     "SELECT business_unit_id = (SELECT id FROM business_units WHERE code = 'LOCAL') AS is_local FROM transactions WHERE id = 3",
     "SELECT business_unit_id = (SELECT id FROM business_units WHERE code = 'LOCAL') AS is_local FROM customers WHERE id = 5",
     "SELECT internal_code, is_internal FROM customers WHERE internal_code = 'LOCAL_INTERNAL' AND business_unit_id = (SELECT id FROM business_units WHERE code = 'WAREHOUSE')",
     "SELECT count(*) AS total FROM app_migrations WHERE id = '20261011_012_business_units_and_warehouse'",
   ], "read");
   assert.deepEqual(units.rows.map((row) => row.code), ["LOCAL", "WAREHOUSE"]);
-  assert.deepEqual(Array.from(inventory.rows[0]), [23, 4, 125.5, 250, 1]);
+  assert.deepEqual(Array.from(inventory.rows[0]), [23, 4, 125.5, 250, 0, 1]);
   assert.equal(transaction.rows[0].is_local, 1);
   assert.equal(customer.rows[0].is_local, 1);
   assert.deepEqual(Array.from(internalCustomer.rows[0]), ["LOCAL_INTERNAL", 1]);

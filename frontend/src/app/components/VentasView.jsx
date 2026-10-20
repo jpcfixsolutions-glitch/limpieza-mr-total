@@ -12,6 +12,7 @@ import { hasPackSale, lineIdFor, packSizeOf, packTypeLabel, unitsEachOf, unitsIn
 import { formatCatalogPrice } from "../../utils/price.js";
 import { ACCOUNT_METHOD_NAME } from "../constants.js";
 import { PaginationBar, paginate, byNameEs } from "./PaginationBar.jsx";
+import { normalizeProductSearch, searchProducts } from "../../utils/productSearch.js";
 
 import { OpenCajaModal } from "./OpenCajaModal.jsx";
 import { PromotionCard } from "./PromotionCard.jsx";
@@ -59,23 +60,18 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
   }, []);
 
   const filteredProducts = useMemo(() => {
-    const term = searchTerm.toLowerCase();
-    const code = searchTerm.trim();
-    return products
-      .filter((product) => {
-        const matchesSearch =
-          (product.name || "").toLowerCase().includes(term) ||
-          (product.codbarra && String(product.codbarra).includes(code));
-        const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory;
-        return matchesSearch && matchesCategory && product.isAvailable;
-      })
-      .sort((a, b) => byNameEs(a.name, b.name));
+    const eligibleProducts = products.filter((product) => (
+      (selectedCategory === "Todos" || product.category === selectedCategory) && product.isAvailable
+    ));
+    return searchTerm.trim()
+      ? searchProducts(eligibleProducts, searchTerm)
+      : eligibleProducts.sort((a, b) => byNameEs(a.name, b.name));
   }, [products, searchTerm, selectedCategory]);
 
   const filteredPromotions = useMemo(() => {
     if (selectedCategory !== "Todos") return [];
-    const term = searchTerm.trim().toLowerCase();
-    return promotions.filter((promotion) => !term || promotion.name.toLowerCase().includes(term) || promotion.items.some((item) => item.name.toLowerCase().includes(term) || String(item.codbarra || "").includes(searchTerm.trim())));
+    const term = normalizeProductSearch(searchTerm);
+    return promotions.filter((promotion) => !term || searchProducts([{ name: promotion.name }, ...promotion.items], term).length > 0);
   }, [promotions, searchTerm, selectedCategory]);
 
   useEffect(() => { setPage(1); }, [searchTerm, selectedCategory]);
@@ -104,6 +100,10 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
       unitsEach = packSizeOf(product);
       price = Number(product.packPrice);
       toastLabel = `${product.name} (${packTypeLabel(product)} x${unitsEach})`;
+    } else if (saleMode === "mayorista" && Number(product.wholesalePrice) > 0) {
+      mode = "mayorista";
+      price = Number(product.wholesalePrice);
+      toastLabel = `${product.name} (precio mayorista)`;
     } else if (saleMode === "escala" && extra.tier) {
       mode = "escala";
       unitsEach = Number(extra.tier.quantity);
@@ -377,7 +377,14 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
 
         <div className="flex flex-col gap-3">
           {filteredProducts.length === 0 && (
-            <p className="text-foreground/60 font-medium text-center py-12">No hay productos disponibles</p>
+            <div className="text-foreground/60 font-medium text-center py-12">
+              <p>No hay productos disponibles{searchTerm.trim() ? " para esta búsqueda" : ""}.</p>
+              {selectedCategory !== "Todos" && (
+                <button type="button" onClick={() => setSelectedCategory("Todos")} className="mt-3 text-primary font-bold hover:underline focus:outline-none focus:ring-2 focus:ring-primary/30 rounded">
+                  Ver todas las categorías
+                </button>
+              )}
+            </div>
           )}
           {paged.slice.map((product) => (
             <ProductCard key={product.id} product={product} onAddToCart={handleAddToCart} />

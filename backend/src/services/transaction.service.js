@@ -148,8 +148,10 @@ export const TransactionService = {
         }
         const product = productById.get(Number(item.productId));
         if (!product) throw { status: 400, message: `Producto no encontrado (id ${item.productId}).` };
-        const saleMode = item.saleMode === "paquete" || item.saleMode === "escala" ? item.saleMode : "unidad";
-        const packSize = saleMode === "unidad" ? 1 : positiveInteger(item.unitsPerPack || item.packSize, "La cantidad de la venta por bulto no es válida.");
+        const saleMode = ["mayorista", "paquete", "escala"].includes(item.saleMode) ? item.saleMode : "unidad";
+        const packSize = saleMode === "unidad" || saleMode === "mayorista"
+          ? 1
+          : positiveInteger(item.unitsPerPack || item.packSize, "La cantidad de la venta por bulto no es válida.");
         requireProduct(product.id, quantity * packSize);
         const source = sourceForProduct.get(product.id);
         const lineTotal = Number(item.total ?? Number(item.price || 0) * quantity);

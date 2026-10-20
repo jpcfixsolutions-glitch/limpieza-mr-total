@@ -95,6 +95,7 @@ export const businessUnitProducts = sqliteTable("business_unit_products", {
   minStock: integer("min_stock").notNull().default(0),
   cost: real("cost").notNull().default(0),
   salePrice: real("sale_price").notNull().default(0),
+  wholesalePrice: real("wholesale_price").notNull().default(0),
   isAvailable: integer("is_available", { mode: "boolean" }).notNull().default(true),
   fulfillmentMode: text("fulfillment_mode", { enum: ["OWN_STOCK", "WAREHOUSE_DIRECT"] }).notNull().default("OWN_STOCK"),
   updatedAt: text("updated_at").default(sql`(datetime('now','localtime'))`),
@@ -220,7 +221,7 @@ export const transactionItems = sqliteTable("transaction_items", {
   price: real("price").notNull(),
   quantity: integer("quantity").notNull(),
   total: real("total").notNull(),
-  saleMode: text("sale_mode", { enum: ["unidad", "paquete", "escala", "promocion"] }).notNull().default("unidad"),
+  saleMode: text("sale_mode", { enum: ["unidad", "mayorista", "paquete", "escala", "promocion"] }).notNull().default("unidad"),
   packSize: integer("pack_size").notNull().default(1),
   promotionComposition: text("promotion_composition"),
 });

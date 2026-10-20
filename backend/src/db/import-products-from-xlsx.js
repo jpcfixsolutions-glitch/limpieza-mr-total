@@ -164,8 +164,8 @@ for (let index = 0; index < grid.length; index++) {
     cost: costRaw > 0 ? costRaw : 0,
     retailPrice,
     wholesalePrice,
-    localAvailable: retailPrice > 0,
-    warehouseAvailable: wholesalePrice > 0,
+    localAvailable: retailPrice > 0 || wholesalePrice > 0,
+    warehouseAvailable: retailPrice > 0 || wholesalePrice > 0,
     usedWholesaleFallback: !(wholesaleRaw > 0) && retailPrice > 0,
     missingRetailPrice: !(retailRaw > 0),
     missingCost: !(costRaw > 0),
@@ -242,8 +242,8 @@ const productRows = products.map((product, index) => [
 const inventoryRows = products.flatMap((product, index) => {
   const productId = index + 1;
   return [
-    [businessUnits.get("LOCAL"), productId, 0, 0, product.cost, product.retailPrice, product.localAvailable ? 1 : 0, "OWN_STOCK"],
-    [businessUnits.get("WAREHOUSE"), productId, 0, 0, product.cost, product.wholesalePrice, product.warehouseAvailable ? 1 : 0, "OWN_STOCK"],
+    [businessUnits.get("LOCAL"), productId, 0, 0, product.cost, product.retailPrice, product.wholesalePrice, product.localAvailable ? 1 : 0, "OWN_STOCK"],
+    [businessUnits.get("WAREHOUSE"), productId, 0, 0, product.cost, product.retailPrice, 0, product.warehouseAvailable ? 1 : 0, "OWN_STOCK"],
   ];
 });
 
@@ -254,7 +254,7 @@ const statements = [
     "use_suggested_price", "suggested_price_percent", "stock", "min_stock", "icon", "is_available",
   ], productRows, 75),
   ...chunkedInsert("business_unit_products", [
-    "business_unit_id", "product_id", "stock", "min_stock", "cost", "sale_price", "is_available", "fulfillment_mode",
+    "business_unit_id", "product_id", "stock", "min_stock", "cost", "sale_price", "wholesale_price", "is_available", "fulfillment_mode",
   ], inventoryRows, 100),
 ];
 

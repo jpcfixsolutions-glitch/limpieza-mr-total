@@ -152,6 +152,37 @@ const migrations = [
     ],
   },
   {
+    id: "20261017_014_local_wholesale_price",
+    statements: [
+      "ALTER TABLE business_unit_products ADD COLUMN wholesale_price REAL NOT NULL DEFAULT 0 CHECK(wholesale_price >= 0)",
+      `UPDATE business_unit_products AS local_inventory
+       SET wholesale_price = COALESCE((
+         SELECT warehouse_inventory.sale_price
+         FROM business_unit_products AS warehouse_inventory
+         JOIN business_units AS warehouse_unit ON warehouse_unit.id = warehouse_inventory.business_unit_id
+         WHERE warehouse_unit.code = 'WAREHOUSE'
+           AND warehouse_inventory.product_id = local_inventory.product_id
+       ), 0)
+       WHERE local_inventory.business_unit_id = (SELECT id FROM business_units WHERE code = 'LOCAL')
+         AND local_inventory.wholesale_price = 0`,
+      `UPDATE business_unit_products AS warehouse_inventory
+       SET sale_price = COALESCE((
+         SELECT local_inventory.sale_price
+         FROM business_unit_products AS local_inventory
+         JOIN business_units AS local_unit ON local_unit.id = local_inventory.business_unit_id
+         WHERE local_unit.code = 'LOCAL'
+           AND local_inventory.product_id = warehouse_inventory.product_id
+       ), warehouse_inventory.sale_price)
+       WHERE warehouse_inventory.business_unit_id = (SELECT id FROM business_units WHERE code = 'WAREHOUSE')`,
+    ],
+  },
+  {
+    id: "20261017_015_generic_product_icons",
+    statements: [
+      "UPDATE products SET icon = 'Package' WHERE icon IS NULL OR icon <> 'Package'",
+    ],
+  },
+  {
     id: "20261011_013_account_movement_reversals",
     statements: [
       "ALTER TABLE account_movements ADD COLUMN source_type TEXT",

@@ -5,22 +5,17 @@ import { toast } from "sonner";
 import api from "../../services/api.js";
 import { useBarcodeScanner } from "../hooks/useBarcodeScanner.js";
 import { formatStock, hasPackSale, packTypeLabel } from "../../utils/pack.js";
-import { calculatePriceForProfitability, calculateProfitabilityPercent, formatCatalogPrice, roundPriceInput } from "../../utils/price.js";
+import { calculateOptionalProfitabilityPercent, calculatePriceForProfitability, calculateProductProfitabilities, calculateProfitabilityPercent, formatCatalogPrice, roundPriceInput } from "../../utils/price.js";
 import { PaginationBar, paginate, byNameEs } from "./PaginationBar.jsx";
-import { PRODUCT_ICON_OPTIONS } from "../../utils/productIcons.js";
 import { PromotionModal } from "./PromotionModal.jsx";
 import { ProductExtractionModal } from "./ProductExtractionModal.jsx";
+import { filterCategories } from "../../utils/categorySearch.js";
+import { normalizeProductSearch, searchProducts } from "../../utils/productSearch.js";
 
-const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", cost: "", targetProfitability: "40", categoryId: null, priceGroupId: null, stock: "", minStock: "", icon: "Package", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
+const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", wholesalePrice: "", cost: "", targetProfitability: "40", targetWholesaleProfitability: "", categoryId: null, priceGroupId: null, stock: "", minStock: "", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
 const PRODUCT_DRAFT_STORAGE_KEY = "descartables-yofre:product-draft";
 
-function normalizeSearch(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLocaleLowerCase("es");
-}
+const normalizeSearch = normalizeProductSearch;
 
 function loadProductDraft() {
   try {
@@ -69,16 +64,17 @@ function isRequestTimeout(error) {
 }
 
 function toModalItem(product) {
-  const profitability = calculateProfitabilityPercent(product.cost, product.price);
+  const { retail: profitability, wholesale: wholesaleProfitability } = calculateProductProfitabilities(product.cost, product.price, product.wholesalePrice);
   return {
     ...product,
     codbarra: product.codbarra || "",
     price: String(product.price),
+    wholesalePrice: product.wholesalePrice != null ? String(product.wholesalePrice) : "",
     cost: String(product.cost ?? ""),
     targetProfitability: profitability == null ? "" : profitability.toFixed(2),
+    targetWholesaleProfitability: wholesaleProfitability == null ? "" : wholesaleProfitability.toFixed(2),
     stock: String(product.stock),
     minStock: String(product.minStock),
-    icon: product.icon || "Package",
     priceGroupId: product.priceGroupId ?? null,
     packTypeId: product.packTypeId ?? null,
     unitsPerPack: Number(product.unitsPerPack) > 1 ? String(product.unitsPerPack) : "",
@@ -87,9 +83,108 @@ function toModalItem(product) {
   };
 }
 
+function ProductCategoryCombobox({ categories, value, onChange }) {
+  const [query, setQuery] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const matches = useMemo(() => filterCategories(categories, query), [categories, query]);
+  const selectedCategory = useMemo(
+    () => categories.find((category) => String(category.id) === String(value)) || null,
+    [categories, value]
+  );
+  const safeActiveIndex = Math.min(activeIndex, matches.length);
+
+  useEffect(() => {
+    setActiveIndex(query && matches.length > 0 ? 1 : 0);
+  }, [query, matches.length]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    document.getElementById(`product-category-option-${safeActiveIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [isOpen, safeActiveIndex]);
+
+  const selectCategory = (category) => {
+    onChange(category?.id ?? null);
+    setQuery("");
+    setIsOpen(false);
+  };
+
+  const handleKeyDown = (event) => {
+    const optionCount = matches.length + 1;
+    if (event.key === "Escape") {
+      setIsOpen(false);
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setIsOpen(true);
+      setActiveIndex((current) => Math.min(current + 1, optionCount - 1));
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setIsOpen(true);
+      setActiveIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+    if (event.key === "Enter" && isOpen) {
+      event.preventDefault();
+      if (query && matches.length === 0) return;
+      selectCategory(safeActiveIndex === 0 ? null : matches[safeActiveIndex - 1]);
+    }
+  };
+
+  return (
+    <div className="relative" onBlur={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget)) setIsOpen(false);
+    }}>
+      <div className="relative">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/60" size={18} aria-hidden="true" />
+        <input
+          id="product-category"
+          type="text"
+          role="combobox"
+          autoComplete="off"
+          value={query}
+          onFocus={() => setIsOpen(true)}
+          onClick={() => setIsOpen(true)}
+          onChange={(event) => { setQuery(event.target.value); setIsOpen(true); }}
+          onKeyDown={handleKeyDown}
+          aria-expanded={isOpen}
+          aria-controls="product-category-listbox"
+          aria-activedescendant={isOpen ? `product-category-option-${safeActiveIndex}` : undefined}
+          aria-autocomplete="list"
+          placeholder="Buscar categoría..."
+          className="w-full bg-surface text-foreground placeholder-foreground/60 font-medium rounded-xl pl-11 pr-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+        />
+      </div>
+      {selectedCategory && (
+        <div className="mt-2 flex items-center justify-between gap-2 text-sm">
+          <span className="min-w-0 truncate text-foreground/75 font-medium">Seleccionada: <strong className="text-foreground">{selectedCategory.name}</strong></span>
+          <button type="button" onClick={() => selectCategory(null)} className="shrink-0 rounded-md px-2 py-1 text-primary font-bold hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30">Limpiar</button>
+        </div>
+      )}
+      {isOpen && (
+        <div className="z-40 mt-2 w-full rounded-xl border border-foreground/15 bg-background p-2 shadow-2xl sm:absolute">
+          <div id="product-category-listbox" role="listbox" aria-label="Resultados de categorías" className="max-h-[min(15rem,calc(100vh-14rem))] overflow-y-auto space-y-1">
+            <button id="product-category-option-0" type="button" role="option" aria-selected={value == null} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCategory(null)} className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold outline-none focus:ring-2 focus:ring-primary/30 ${value == null ? "bg-primary/15 text-primary" : "hover:bg-surface"} ${safeActiveIndex === 0 ? "ring-2 ring-primary/30" : ""}`}>Sin categoría</button>
+            {matches.map((category, index) => (
+              <button key={category.id} id={`product-category-option-${index + 1}`} type="button" role="option" aria-selected={String(value) === String(category.id)} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCategory(category)} className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold outline-none focus:ring-2 focus:ring-primary/30 ${String(value) === String(category.id) ? "bg-primary/15 text-primary" : "hover:bg-surface"} ${safeActiveIndex === index + 1 ? "ring-2 ring-primary/30" : ""}`}>{category.name}</button>
+            ))}
+            {matches.length === 0 && <p className="px-3 py-4 text-center text-sm text-foreground/60">No se encontraron categorías</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function InventarioView() {
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("Todos");
+  const [selectedCategoryId, setSelectedCategoryId] = useState(null);
+  const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
+  const [categoryQuery, setCategoryQuery] = useState("");
+  const [activeCategoryIndex, setActiveCategoryIndex] = useState(0);
   const [inventory, setInventory] = useState([]);
   const [promotions, setPromotions] = useState([]);
   const [promotionModalOpen, setPromotionModalOpen] = useState(false);
@@ -160,6 +255,14 @@ export function InventarioView() {
     () => [...categories].sort((a, b) => byNameEs(a.name, b.name)),
     [categories]
   );
+  const categoryFilterOptions = useMemo(() => {
+    return filterCategories(sortedCategories, categoryQuery);
+  }, [sortedCategories, categoryQuery]);
+  const selectedCategory = useMemo(
+    () => sortedCategories.find((category) => String(category.id) === String(selectedCategoryId)) || null,
+    [sortedCategories, selectedCategoryId]
+  );
+  const activeCategoryOptionIndex = Math.min(activeCategoryIndex, categoryFilterOptions.length);
   const sortedBrands = useMemo(
     () => [...brands].sort((a, b) => byNameEs(a.name, b.name)),
     [brands]
@@ -171,38 +274,41 @@ export function InventarioView() {
 
   const filteredInventory = useMemo(() => {
     const term = normalizeSearch(searchTerm);
-    const code = searchTerm.trim();
-    return inventory
-      .filter((p) => {
-        const searchableText = [p.name, p.category, p.priceGroupName, p.packTypeName]
-          .map(normalizeSearch)
-          .join(" ");
-        const matchesSearch = !term || searchableText.includes(term) || String(p.codbarra || "").includes(code);
-        const matchesCategory = selectedCategory === "Todos" || p.category === selectedCategory;
-        const matchesGroup =
-          groupFilter === "todos" ||
-          (groupFilter === "sin-grupo" && !p.priceGroupId) ||
-          (groupFilter === "proveedores" && p.priceGroupType === "proveedor") ||
-          (groupFilter === "colecciones" && p.priceGroupType === "coleccion") ||
-          String(p.priceGroupId) === String(groupFilter);
-        return matchesSearch && matchesCategory && matchesGroup;
-      })
-      .sort((a, b) => byNameEs(a.name, b.name));
-  }, [inventory, searchTerm, selectedCategory, groupFilter]);
+    const matchingFilters = inventory.filter((p) => {
+      const matchesCategory = selectedCategoryId == null || String(p.categoryId) === String(selectedCategoryId);
+      const matchesGroup =
+        groupFilter === "todos" ||
+        (groupFilter === "sin-grupo" && !p.priceGroupId) ||
+        (groupFilter === "proveedores" && p.priceGroupType === "proveedor") ||
+        (groupFilter === "colecciones" && p.priceGroupType === "coleccion") ||
+        String(p.priceGroupId) === String(groupFilter);
+      return matchesCategory && matchesGroup;
+    });
+    return term ? searchProducts(matchingFilters, searchTerm) : matchingFilters.sort((a, b) => byNameEs(a.name, b.name));
+  }, [inventory, searchTerm, selectedCategoryId, groupFilter]);
 
   const filteredRows = useMemo(() => {
     const term = normalizeSearch(searchTerm);
     const code = searchTerm.trim();
-    const promotionRows = selectedCategory === "Todos" && groupFilter === "todos"
+    const promotionRows = selectedCategoryId == null && groupFilter === "todos"
       ? promotions
         .filter((promotion) => !term || normalizeSearch(`${promotion.name} ${promotion.description || ""}`).includes(term) || promotion.items.some((item) => normalizeSearch(item.name).includes(term) || String(item.codbarra || "").includes(code)))
         .map((promotion) => ({ ...promotion, rowType: "promotion", rowId: `promotion-${promotion.id}` }))
       : [];
-    return [...filteredInventory.map((product) => ({ ...product, rowType: "product", rowId: `product-${product.id}` })), ...promotionRows]
-      .sort((a, b) => byNameEs(a.name, b.name));
-  }, [filteredInventory, promotions, searchTerm, selectedCategory, groupFilter]);
+    const rows = [...filteredInventory.map((product) => ({ ...product, rowType: "product", rowId: `product-${product.id}` })), ...promotionRows];
+    return term ? rows : rows.sort((a, b) => byNameEs(a.name, b.name));
+  }, [filteredInventory, promotions, searchTerm, selectedCategoryId, groupFilter]);
 
-  useEffect(() => { setPage(1); }, [searchTerm, selectedCategory, groupFilter]);
+  useEffect(() => { setPage(1); }, [searchTerm, selectedCategoryId, groupFilter]);
+
+  useEffect(() => {
+    setActiveCategoryIndex(categoryQuery && categoryFilterOptions.length > 0 ? 1 : 0);
+  }, [categoryQuery, categoryFilterOptions.length]);
+
+  useEffect(() => {
+    if (!categoryMenuOpen) return;
+    document.getElementById(`category-filter-option-${activeCategoryOptionIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [categoryMenuOpen, activeCategoryOptionIndex]);
 
   const paged = paginate(filteredRows, page);
   const lowStockItems = useMemo(
@@ -257,7 +363,6 @@ export function InventarioView() {
 
   const openEditProduct = useCallback((product) => {
     setProductModal({ isOpen: true, item: toModalItem(product), isNew: false });
-    setSearchTerm("");
     toast.success(`Producto encontrado: ${product.name}`);
   }, []);
 
@@ -297,10 +402,15 @@ export function InventarioView() {
     if (!deleteModal.product || deleting) return;
     setDeleting(true);
     try {
-      await api.delete(`/products/${deleteModal.product.id}`);
-      toast.success(`"${deleteModal.product.name}" eliminado`);
+      const removed = deleteModal.product;
+      await api.delete(`/products/${removed.id}`);
+      setInventory((current) => current.filter((product) => product.id !== removed.id));
+      setSelectedIds((current) => current.filter((id) => id !== removed.id));
+      setProductModal((current) => current.item?.id === removed.id
+        ? { isOpen: false, item: null, isNew: false }
+        : current);
+      toast.success(`"${removed.name}" dado de baja del catálogo`);
       setDeleteModal({ isOpen: false, product: null });
-      fetchData();
     } catch (err) {
       toast.error(err.response?.data?.message || "Error al eliminar el producto");
     } finally {
@@ -329,9 +439,9 @@ export function InventarioView() {
         name: productModal.item.name,
         codbarra: productModal.item.codbarra?.trim() || null,
         categoryId: productModal.item.categoryId ? Number(productModal.item.categoryId) : null,
-        icon: productModal.item.icon || "Package",
         isAvailable: productModal.item.isAvailable !== false,
         price: parseFloat(productModal.item.price) || 0,
+        wholesalePrice: parseFloat(productModal.item.wholesalePrice) || 0,
         cost: parseFloat(productModal.item.cost) || 0,
         stock: parseInt(productModal.item.stock, 10) || 0,
         minStock: parseInt(productModal.item.minStock, 10) || 0,
@@ -420,8 +530,40 @@ export function InventarioView() {
     ? Number(productModal.item.priceGroupId)
     : "";
 
-  const categoryNames = sortedCategories.map((c) => c.name);
+  const selectCategoryFilter = (category) => {
+    setSelectedCategoryId(category?.id ?? null);
+    setCategoryQuery("");
+    setCategoryMenuOpen(false);
+  };
 
+  const handleCategoryKeyDown = (event) => {
+    const optionCount = categoryFilterOptions.length + 1;
+
+    if (event.key === "Escape") {
+      setCategoryMenuOpen(false);
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setCategoryMenuOpen(true);
+      setActiveCategoryIndex((current) => Math.min(current + 1, optionCount - 1));
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setCategoryMenuOpen(true);
+      setActiveCategoryIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+
+    if (event.key === "Enter" && categoryMenuOpen) {
+      event.preventDefault();
+      if (categoryQuery && categoryFilterOptions.length === 0) return;
+      selectCategoryFilter(activeCategoryOptionIndex === 0 ? null : categoryFilterOptions[activeCategoryOptionIndex - 1]);
+    }
+  };
 
   return (
     <div className="flex-1 min-w-0 p-4 pb-20 md:p-8 overflow-y-auto relative">
@@ -522,17 +664,78 @@ export function InventarioView() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
         <div>
-          <label className="text-foreground/80 font-bold text-sm block mb-2">Categoría</label>
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm"
+          <label htmlFor="category-filter" className="text-foreground/80 font-bold text-sm block mb-2">Categoría</label>
+          <div
+            className="relative"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) setCategoryMenuOpen(false);
+            }}
           >
-            <option value="Todos">Todas las categorías</option>
-            {categoryNames.map((cat) => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </select>
+            <div className="relative">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/60" size={18} aria-hidden="true" />
+              <input
+                id="category-filter"
+                type="text"
+                role="combobox"
+                autoComplete="off"
+                value={categoryQuery}
+                onFocus={() => setCategoryMenuOpen(true)}
+                onClick={() => setCategoryMenuOpen(true)}
+                onChange={(event) => { setCategoryQuery(event.target.value); setCategoryMenuOpen(true); }}
+                onKeyDown={handleCategoryKeyDown}
+                aria-expanded={categoryMenuOpen}
+                aria-controls="category-filter-listbox"
+                aria-activedescendant={categoryMenuOpen ? `category-filter-option-${activeCategoryOptionIndex}` : undefined}
+                aria-autocomplete="list"
+                placeholder="Buscar categoría..."
+                className="w-full bg-surface text-foreground placeholder-foreground/60 font-medium rounded-xl pl-11 pr-4 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+              />
+            </div>
+            {selectedCategory && (
+              <div className="mt-2 flex items-center justify-between gap-2 text-sm">
+                <span className="min-w-0 truncate text-foreground/75 font-medium">Seleccionada: <strong className="text-foreground">{selectedCategory.name}</strong></span>
+                <button
+                  type="button"
+                  onClick={() => selectCategoryFilter(null)}
+                  className="shrink-0 rounded-md px-2 py-1 text-primary font-bold hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  Limpiar
+                </button>
+              </div>
+            )}
+            {categoryMenuOpen && (
+              <div className="z-30 mt-2 w-full rounded-xl border border-foreground/15 bg-background p-2 shadow-2xl sm:absolute">
+                <div id="category-filter-listbox" role="listbox" aria-label="Resultados de categorías" className="max-h-[min(15rem,calc(100vh-14rem))] overflow-y-auto space-y-1">
+                  <button
+                    id="category-filter-option-0"
+                    type="button"
+                    role="option"
+                    aria-selected={selectedCategoryId == null}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectCategoryFilter(null)}
+                    className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold outline-none focus:ring-2 focus:ring-primary/30 ${selectedCategoryId == null ? "bg-primary/15 text-primary" : "hover:bg-surface"} ${activeCategoryOptionIndex === 0 ? "ring-2 ring-primary/30" : ""}`}
+                  >
+                    Todas las categorías
+                  </button>
+                  {categoryFilterOptions.map((category, index) => (
+                    <button
+                      key={category.id}
+                      id={`category-filter-option-${index + 1}`}
+                      type="button"
+                      role="option"
+                      aria-selected={String(selectedCategoryId) === String(category.id)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => selectCategoryFilter(category)}
+                      className={`w-full rounded-lg px-3 py-2 text-left text-sm font-bold outline-none focus:ring-2 focus:ring-primary/30 ${String(selectedCategoryId) === String(category.id) ? "bg-primary/15 text-primary" : "hover:bg-surface"} ${activeCategoryOptionIndex === index + 1 ? "ring-2 ring-primary/30" : ""}`}
+                    >
+                      {category.name}
+                    </button>
+                  ))}
+                  {categoryFilterOptions.length === 0 && <p className="px-3 py-4 text-center text-sm text-foreground/60">No se encontraron categorías</p>}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         <div>
           <label className="text-foreground/80 font-bold text-sm block mb-2">Proveedor / Colección</label>
@@ -567,6 +770,19 @@ export function InventarioView() {
         <p className="mb-4 text-sm font-medium text-foreground/70">
           {filteredRows.length} resultado{filteredRows.length === 1 ? "" : "s"} para “{searchTerm.trim()}”
         </p>
+      )}
+
+      {searchTerm.trim() && filteredRows.length === 0 && (selectedCategoryId != null || groupFilter !== "todos") && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 text-sm text-foreground/80">
+          <span className="font-medium">Revisá los filtros activos: pueden estar ocultando productos.</span>
+          <button
+            type="button"
+            onClick={() => { setSelectedCategoryId(null); setGroupFilter("todos"); }}
+            className="text-primary font-bold hover:underline focus:outline-none focus:ring-2 focus:ring-primary/30 rounded"
+          >
+            Limpiar filtros
+          </button>
+        </div>
       )}
 
       {selectedIds.length > 0 && (
@@ -638,6 +854,7 @@ export function InventarioView() {
                 const noStock = product.stock === 0;
                 const lowStock = !noStock && product.stock <= product.minStock;
                 const profitability = calculateProfitabilityPercent(product.cost, product.price);
+                const wholesaleProfitability = calculateOptionalProfitabilityPercent(product.cost, product.wholesalePrice);
                 return (
                   <tr key={product.id} className="border-b border-foreground/15 hover:bg-background/50 transition-colors">
                     <td className="p-4">
@@ -682,7 +899,8 @@ export function InventarioView() {
                       <span className="text-foreground/80 font-medium">${Number(product.cost || 0).toFixed(2)}</span>
                     </td>
                     <td className="p-4 whitespace-nowrap">
-                      <span className="text-foreground font-black block">${formatCatalogPrice(product.price)}</span>
+                      <span className="text-foreground font-black block">Minorista: ${formatCatalogPrice(product.price)}</span>
+                      {Number(product.wholesalePrice) > 0 && <span className="text-success font-bold text-xs block">Mayorista: ${formatCatalogPrice(product.wholesalePrice)}</span>}
                       {hasPackSale(product) && (
                         <span className="text-foreground/60 font-medium text-xs">{packTypeLabel(product)} x{product.unitsPerPack} ${formatCatalogPrice(product.packPrice)}</span>
                       )}
@@ -695,7 +913,8 @@ export function InventarioView() {
                     <td className="p-4 whitespace-nowrap">
                       {profitability == null
                         ? <span className="text-foreground/50 font-medium text-sm">Sin costo</span>
-                        : <span className={`font-black ${profitability >= 40 ? "text-success" : profitability >= 0 ? "text-yellow-700" : "text-red-600"}`}>{profitability.toFixed(2)}%</span>}
+                        : <span className={`font-black block ${profitability >= 40 ? "text-success" : profitability >= 0 ? "text-yellow-700" : "text-red-600"}`}>Minorista: {profitability.toFixed(2)}%</span>}
+                      {wholesaleProfitability != null && <span className={`font-bold text-xs block ${wholesaleProfitability >= 40 ? "text-success" : wholesaleProfitability >= 0 ? "text-yellow-700" : "text-red-600"}`}>Mayorista: {wholesaleProfitability.toFixed(2)}%</span>}
                     </td>
                     <td className="p-4 whitespace-nowrap">
                       <span className="text-foreground font-bold">{formatStock(product.stock, product.unitsPerPack, packTypeLabel(product))}</span>
@@ -763,44 +982,16 @@ export function InventarioView() {
                   />
                 </div>
               ))}
-              {/* Selector de ícono */}
               <div>
-                <label className="text-foreground/80 font-bold text-sm block mb-2">Ícono del producto</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {PRODUCT_ICON_OPTIONS.map(({ key, Icon, label }) => {
-                    const selected = (productModal.item.icon || "Package") === key;
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        title={label}
-                        onClick={() => setProductModal((prev) => ({ ...prev, item: { ...prev.item, icon: key } }))}
-                        className={`flex flex-col items-center gap-1 py-3 rounded-xl border transition-all ${
-                          selected
-                            ? "bg-primary/10 border-primary text-foreground shadow-sm font-bold"
-                            : "bg-surface border-surface text-foreground/60 font-medium hover:border-primary/50"
-                        }`}
-                      >
-                        <Icon size={20} />
-                        <span className="text-[10px] leading-tight text-center mt-1">{label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-foreground/80 font-bold text-sm block mb-2">Categoría</label>
-                <select
+                <label htmlFor="product-category" className="text-foreground/80 font-bold text-sm block mb-2">Categoría</label>
+                <ProductCategoryCombobox
+                  categories={sortedCategories}
                   value={productModal.item.categoryId ?? ""}
-                  onChange={(e) => setProductModal((prev) => ({
+                  onChange={(categoryId) => setProductModal((prev) => ({
                     ...prev,
-                    item: { ...prev.item, categoryId: e.target.value ? Number(e.target.value) : null },
+                    item: { ...prev.item, categoryId: categoryId == null ? null : Number(categoryId) },
                   }))}
-                  className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
-                >
-                  {sortedCategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -833,7 +1024,7 @@ export function InventarioView() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="text-foreground/80 font-bold text-sm block mb-2">Costo ($)</label>
                   <input
@@ -845,7 +1036,8 @@ export function InventarioView() {
                       const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
                       setProductModal((prev) => {
                         const profitability = calculateProfitabilityPercent(val, prev.item.price);
-                        return { ...prev, item: { ...prev.item, cost: val, targetProfitability: profitability == null ? prev.item.targetProfitability : profitability.toFixed(2) } };
+                        const wholesaleProfitability = calculateOptionalProfitabilityPercent(val, prev.item.wholesalePrice);
+                        return { ...prev, item: { ...prev.item, cost: val, targetProfitability: profitability == null ? "" : profitability.toFixed(2), targetWholesaleProfitability: wholesaleProfitability == null ? "" : wholesaleProfitability.toFixed(2) } };
                       });
                     }}
                     onFocus={(e) => e.target.select()}
@@ -854,7 +1046,7 @@ export function InventarioView() {
                   />
                 </div>
                 <div>
-                  <label className="text-foreground/80 font-bold text-sm block mb-2">Precio unidad ($)</label>
+                  <label className="text-foreground/80 font-bold text-sm block mb-2">Precio minorista ($)</label>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -864,13 +1056,13 @@ export function InventarioView() {
                       const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
                       setProductModal((prev) => {
                         const profitability = calculateProfitabilityPercent(prev.item.cost, val);
-                        return { ...prev, item: { ...prev.item, price: val, targetProfitability: profitability == null ? prev.item.targetProfitability : profitability.toFixed(2) } };
+                        return { ...prev, item: { ...prev.item, price: val, targetProfitability: profitability == null ? "" : profitability.toFixed(2) } };
                       });
                     }}
                     onBlur={(e) => setProductModal((prev) => {
                       const price = roundPriceInput(e.target.value);
                       const profitability = calculateProfitabilityPercent(prev.item.cost, price);
-                      return { ...prev, item: { ...prev.item, price, targetProfitability: profitability == null ? prev.item.targetProfitability : profitability.toFixed(2) } };
+                      return { ...prev, item: { ...prev.item, price, targetProfitability: profitability == null ? "" : profitability.toFixed(2) } };
                     })}
                     onFocus={(e) => e.target.select()}
                     placeholder="0"
@@ -878,7 +1070,31 @@ export function InventarioView() {
                   />
                 </div>
                 <div>
-                  <label className="text-foreground/80 font-bold text-sm block mb-2">Rentabilidad (%)</label>
+                  <label className="text-foreground/80 font-bold text-sm block mb-2">Precio mayorista ($)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={productModal.item.wholesalePrice ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
+                      setProductModal((prev) => {
+                        const profitability = calculateOptionalProfitabilityPercent(prev.item.cost, val);
+                        return { ...prev, item: { ...prev.item, wholesalePrice: val, targetWholesaleProfitability: profitability == null ? "" : profitability.toFixed(2) } };
+                      });
+                    }}
+                    onBlur={(e) => setProductModal((prev) => {
+                      const wholesalePrice = roundPriceInput(e.target.value);
+                      const profitability = calculateOptionalProfitabilityPercent(prev.item.cost, wholesalePrice);
+                      return { ...prev, item: { ...prev.item, wholesalePrice, targetWholesaleProfitability: profitability == null ? "" : profitability.toFixed(2) } };
+                    })}
+                    onFocus={(e) => e.target.select()}
+                    placeholder="0"
+                    className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="text-foreground/80 font-bold text-sm block mb-2">Rentabilidad minorista (%)</label>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -896,7 +1112,26 @@ export function InventarioView() {
                     className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
                   />
                 </div>
-                <p className="sm:col-span-3 text-foreground/60 font-medium text-xs">
+                <div>
+                  <label className="text-foreground/80 font-bold text-sm block mb-2">Rentabilidad mayorista (%)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={productModal.item.targetWholesaleProfitability ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9.]/g, "").replace(/^0+(?=\d)/, "");
+                      setProductModal((prev) => {
+                        const wholesalePrice = calculatePriceForProfitability(prev.item.cost, val);
+                        return { ...prev, item: { ...prev.item, targetWholesaleProfitability: val, wholesalePrice: Number.isFinite(wholesalePrice) ? String(wholesalePrice) : prev.item.wholesalePrice } };
+                      });
+                    }}
+                    onFocus={(e) => e.target.select()}
+                    placeholder="40"
+                    className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+                  />
+                </div>
+                <p className="sm:col-span-2 text-foreground/60 font-medium text-xs">
                   Los precios de venta se redondean hacia arriba a la próxima decena y se guardan sin centavos. El costo conserva el valor exacto ingresado.
                 </p>
               </div>

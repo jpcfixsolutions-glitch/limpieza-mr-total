@@ -56,6 +56,7 @@ export function lineIdFor(productId, saleMode, extra) {
 }
 
 export function saleLabel(item) {
+  if (item.saleMode === "mayorista") return "Precio mayorista";
   if (item.saleMode === "escala") return `x${unitsEachOf(item)}`;
   if (item.saleMode === "paquete") return `${packTypeLabel(item)} x${packSizeOf(item)}`;
   return "Unidad";
