@@ -16,6 +16,7 @@ import { normalizeProductSearch, searchProducts } from "../../utils/productSearc
 
 import { OpenCajaModal } from "./OpenCajaModal.jsx";
 import { PromotionCard } from "./PromotionCard.jsx";
+import { SaleTicket } from "./SaleTicket.jsx";
 
 export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaja, role, suggestedInitialCash = 0 }) {
   const [searchTerm, setSearchTerm] = useState("");
@@ -31,6 +32,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
   const [loading, setLoading] = useState(true);
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [page, setPage] = useState(1);
+  const [ticketToPrint, setTicketToPrint] = useState(null);
   const cartRef = useRef(cartItems);
   const saleRequestKeyRef = useRef(null);
   cartRef.current = cartItems;
@@ -75,6 +77,19 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
   }, [promotions, searchTerm, selectedCategory]);
 
   useEffect(() => { setPage(1); }, [searchTerm, selectedCategory]);
+
+  useEffect(() => {
+    if (!ticketToPrint) return undefined;
+
+    const clearTicket = () => setTicketToPrint(null);
+    const printTimer = window.setTimeout(() => window.print(), 150);
+    window.addEventListener("afterprint", clearTicket, { once: true });
+
+    return () => {
+      window.clearTimeout(printTimer);
+      window.removeEventListener("afterprint", clearTicket);
+    };
+  }, [ticketToPrint]);
 
   const paged = paginate(filteredProducts, page);
 
@@ -232,6 +247,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
       idempotencyKey: saleRequestKeyRef.current || (saleRequestKeyRef.current = crypto.randomUUID()),
       total: finalTotal,
       customerId: meta.customerId ?? null,
+      customerName: meta.customerName ?? null,
       discountPercent: meta.discountPercent ?? 0,
       discountAmount: meta.discountAmount ?? 0,
       payments: payments.map((p) => ({
@@ -253,7 +269,14 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
     };
 
     try {
-      await onAddTransaction(transaction);
+      const savedTransaction = await onAddTransaction(transaction);
+      setTicketToPrint({
+        ...transaction,
+        ...savedTransaction,
+        customerName: transaction.customerName,
+        items: transaction.items,
+        payments: savedTransaction?.payments || transaction.payments,
+      });
       toast.success("Venta procesada exitosamente", {
         description: accountTotal > 0
           ? `Cobrado ahora: $${(finalTotal - accountTotal).toFixed(2)} · A cuenta: $${accountTotal.toFixed(2)}`
@@ -458,6 +481,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
         onConfirm={handleConfirmOpen}
         suggestedAmount={suggestedInitialCash}
       />
+      <SaleTicket transaction={ticketToPrint} />
     </div>
   );
 }

@@ -156,6 +156,7 @@ export default function App() {
       })),
     };
     setTransactions((prev) => [normalized, ...prev]);
+    return normalized;
   }
 
   function handleLogin(loggedUser) {

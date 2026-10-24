@@ -151,6 +151,7 @@ export function PaymentModal({ total, paymentMethods, onClose, onConfirm }) {
 
       await onConfirm(finalPayments, {
         customerId: customer?.id ?? null,
+        customerName: customer ? `${customer.name} ${customer.lastName}`.trim() : null,
         discountPercent: appliedDiscount ?? 0,
         discountAmount,
       });
@@ -440,7 +441,7 @@ export function PaymentModal({ total, paymentMethods, onClose, onConfirm }) {
             className="flex-1 bg-secondary hover:brightness-125 disabled:bg-surface disabled:text-foreground/50 disabled:cursor-not-allowed text-foreground font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-secondary/20"
           >
             <Printer size={20} />
-            {submitting ? "Registrando..." : change > 0 ? `Confirmar — Dar vuelto $${change.toFixed(2)}` : "Confirmar e Imprimir Ticket"}
+            {submitting ? "Registrando..." : change > 0 ? `Confirmar e Imprimir — Vuelto $${change.toFixed(2)}` : "Confirmar e Imprimir Ticket"}
           </button>
         </div>
       </div>
