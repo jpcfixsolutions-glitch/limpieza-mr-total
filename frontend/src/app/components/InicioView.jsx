@@ -372,13 +372,16 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
               <p className="text-foreground/80 font-medium text-sm mb-4">Seleccioná el producto, la cantidad y el destino del consumo. Se descuenta en unidades del stock y queda registrado en el historial.</p>
               <div>
                 <label className="text-foreground/80 font-bold text-sm block mb-2">Producto</label>
-                <input
-                  type="text"
-                  placeholder="Buscar por nombre..."
-                  value={searchWithdraw}
-                  onChange={(e) => setSearchWithdraw(e.target.value)}
-                  className="w-full bg-surface text-foreground placeholder-foreground/50 rounded-xl px-4 py-3 mb-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-bold shadow-sm"
-                />
+                <div className="relative mb-3">
+                  <input
+                    type="text"
+                    placeholder="Buscar por nombre..."
+                    value={searchWithdraw}
+                    onChange={(e) => setSearchWithdraw(e.target.value)}
+                    className="w-full bg-surface text-foreground placeholder-foreground/50 rounded-xl pl-4 pr-11 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-bold shadow-sm"
+                  />
+                  {searchWithdraw && <button type="button" onClick={() => setSearchWithdraw("")} className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-foreground/45 hover:text-foreground rounded-full" title="Limpiar búsqueda" aria-label="Limpiar búsqueda"><X size={18} /></button>}
+                </div>
                 <select
                   value={withdrawProductId}
                   onChange={(e) => setWithdrawProductId(e.target.value)}

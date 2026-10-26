@@ -10,10 +10,12 @@ import {
   ShoppingBag,
   Banknote,
   Plus,
+  Printer,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../services/api.js";
 import { Loader } from "./Loader.jsx";
+import { AccountTicket } from "./AccountTicket.jsx";
 
 function formatDateTime(value) {
   if (!value) return "-";
@@ -44,6 +46,18 @@ export function CuentasCorrientesView() {
   const [submitting, setSubmitting] = useState(false);
   const [newCustomerModal, setNewCustomerModal] = useState(false);
   const [newCustomer, setNewCustomer] = useState({ name: "", document: "", initialDebt: "" });
+  const [accountTicket, setAccountTicket] = useState(null);
+
+  useEffect(() => {
+    if (!accountTicket) return undefined;
+    const clearTicket = () => setAccountTicket(null);
+    const timer = window.setTimeout(() => window.print(), 150);
+    window.addEventListener("afterprint", clearTicket, { once: true });
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("afterprint", clearTicket);
+    };
+  }, [accountTicket]);
 
   const fetchCustomers = useCallback(async () => {
     setLoading(true);
@@ -112,7 +126,7 @@ export function CuentasCorrientesView() {
     }
   }, [detail, paymentRequestId]);
 
-  const handleRegisterPayment = async () => {
+  const handleRegisterPayment = async (printAfter = false) => {
     if (submitting || !paymentModal) return;
     const amount = Number(paymentModal.amount);
     if (!amount || amount <= 0) {
@@ -130,7 +144,8 @@ export function CuentasCorrientesView() {
 
     setSubmitting(true);
     try {
-      await api.post(`/customers/${detail.id}/payments`, {
+      const debtBefore = Number(detail.debt || 0);
+      const { data } = await api.post(`/customers/${detail.id}/payments`, {
         amount,
         methodName: paymentModal.methodName,
         description: paymentModal.description,
@@ -138,6 +153,20 @@ export function CuentasCorrientesView() {
       toast.success("Pago registrado correctamente");
       setPaymentModal(null);
       await Promise.all([fetchDetail(detail.id), fetchCustomers()]);
+      if (printAfter) {
+        setAccountTicket({
+          kind: "payment",
+          movementId: data.id,
+          customerName: `${detail.name} ${detail.lastName}`.trim(),
+          document: detail.document,
+          createdAt: data.createdAt,
+          amount,
+          methodName: data.methodName || paymentModal.methodName,
+          description: data.detail || paymentModal.description,
+          previousDebt: debtBefore,
+          currentDebt: Number(data.debt || 0),
+        });
+      }
     } catch (err) {
       toast.error(err.response?.data?.message || "No se pudo registrar el pago");
     } finally {
@@ -145,16 +174,60 @@ export function CuentasCorrientesView() {
     }
   };
 
-  const handleCreateCustomer = async () => {
+  const handleCreateCustomer = async (printAfter = false) => {
     const initialDebt = Number(newCustomer.initialDebt);
     if (submitting || !newCustomer.name.trim() || !newCustomer.document.trim() || newCustomer.initialDebt === "") return toast.error("Completá nombre, DNI y deuda inicial");
     if (!Number.isFinite(initialDebt) || initialDebt < 0) return toast.error("La deuda inicial no puede ser negativa");
     setSubmitting(true);
     try {
-      await api.post("/customers", { name: newCustomer.name, document: newCustomer.document, initialDebt });
-      toast.success("Cliente registrado correctamente"); setNewCustomerModal(false); setNewCustomer({ name: "", document: "", initialDebt: "" }); await fetchCustomers();
+      const { data } = await api.post("/customers", { name: newCustomer.name, document: newCustomer.document, initialDebt });
+      toast.success("Cliente registrado correctamente");
+      setNewCustomerModal(false);
+      if (printAfter && initialDebt > 0) {
+        setAccountTicket({
+          kind: "charge",
+          customerName: `${data.name} ${data.lastName || ""}`.trim(),
+          document: data.document,
+          createdAt: data.createdAt || new Date().toISOString(),
+          amount: initialDebt,
+          currentDebt: Number(data.debt || initialDebt),
+          items: [{ name: "Deuda inicial", quantity: 1, total: initialDebt }],
+        });
+      }
+      setNewCustomer({ name: "", document: "", initialDebt: "" });
+      await fetchCustomers();
     } catch (err) { toast.error(err.response?.data?.message || "No se pudo registrar el cliente"); }
     finally { setSubmitting(false); }
+  };
+
+  const printCurrentStatement = () => {
+    if (!detail) return;
+    setAccountTicket({
+      kind: "statement",
+      customerName: `${detail.name} ${detail.lastName}`.trim(),
+      document: detail.document,
+      createdAt: new Date().toISOString(),
+      currentDebt: detail.debt,
+      totalCharges: detail.totalCharges,
+      totalPayments: detail.totalPayments,
+    });
+  };
+
+  const printMovement = (movement) => {
+    if (!detail || !["cargo", "pago"].includes(movement.type)) return;
+    setAccountTicket({
+      kind: movement.type === "cargo" ? "charge" : "payment",
+      movementId: movement.id,
+      transactionId: movement.transactionId,
+      customerName: `${detail.name} ${detail.lastName}`.trim(),
+      document: detail.document,
+      createdAt: movement.createdAt,
+      amount: movement.amount,
+      methodName: movement.methodName,
+      description: movement.description,
+      currentDebt: detail.debt,
+      items: movement.items,
+    });
   };
 
   // ─── Detalle de un cliente ──────────────────────────────────────────────────
@@ -182,13 +255,18 @@ export function CuentasCorrientesView() {
                   {detail.phone && <span className="flex items-center gap-1.5"><Phone size={16} /> {detail.phone}</span>}
                 </div>
               </div>
-              <button
-                onClick={openPaymentModal}
-                disabled={detail.debt <= 0}
-                className="bg-success hover:brightness-125 disabled:bg-surface disabled:text-foreground/40 text-foreground font-bold px-5 py-3 rounded-xl flex items-center gap-2 transition-all shadow-md self-start"
-              >
-                <HandCoins size={18} /> Registrar pago
-              </button>
+              <div className="flex flex-wrap gap-2 self-start">
+                <button onClick={printCurrentStatement} className="bg-surface hover:bg-primary/10 border border-foreground/15 text-foreground font-bold px-4 py-3 rounded-xl flex items-center gap-2 transition-all shadow-sm">
+                  <Printer size={18} /> Imprimir estado
+                </button>
+                <button
+                  onClick={openPaymentModal}
+                  disabled={detail.debt <= 0}
+                  className="bg-success hover:brightness-125 disabled:bg-surface disabled:text-foreground/40 text-foreground font-bold px-5 py-3 rounded-xl flex items-center gap-2 transition-all shadow-md"
+                >
+                  <HandCoins size={18} /> Registrar pago
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
@@ -242,9 +320,16 @@ export function CuentasCorrientesView() {
                             <p className="text-foreground/70 font-medium text-sm">{formatDateTime(movement.createdAt)}</p>
                           </div>
                         </div>
-                        <span className={`font-black text-lg shrink-0 ${isCharge ? "text-secondary" : "text-success"}`}>
-                          {isCharge ? "+" : "-"}${Number(movement.amount).toFixed(2)}
-                        </span>
+                        <div className="shrink-0 flex flex-col items-end gap-1">
+                          <span className={`font-black text-lg ${isCharge ? "text-secondary" : "text-success"}`}>
+                            {isCharge ? "+" : "-"}${Number(movement.amount).toFixed(2)}
+                          </span>
+                          {["cargo", "pago"].includes(movement.type) && (
+                            <button type="button" onClick={() => printMovement(movement)} className="text-xs text-primary font-bold flex items-center gap-1 hover:underline">
+                              <Printer size={13} /> Imprimir
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {isCharge && movement.items.length > 0 && (
@@ -329,21 +414,29 @@ export function CuentasCorrientesView() {
                 <div><label className="text-foreground/80 font-bold text-sm block mb-2">Descripción (opcional)</label><input value={paymentModal.description || ""} onChange={(e) => setPaymentModal((prev) => ({ ...prev, description: e.target.value }))} className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-foreground/15" placeholder="Ej. Pago parcial" /></div>
               </div>
 
-              <div className="p-6 border-t border-surface flex gap-4">
+              <div className="p-6 border-t border-surface flex flex-col sm:flex-row gap-3">
                 <button onClick={() => setPaymentModal(null)} className="flex-1 bg-surface hover:bg-primary/10 text-foreground font-bold py-3 rounded-xl transition-all shadow-sm">
                   Cancelar
                 </button>
                 <button
-                  onClick={handleRegisterPayment}
+                  onClick={() => handleRegisterPayment(false)}
                   disabled={submitting}
-                  className="flex-1 bg-success hover:brightness-125 disabled:bg-surface disabled:text-foreground/50 text-foreground font-bold py-3 rounded-xl transition-all shadow-md"
+                  className="flex-1 bg-surface hover:bg-success/10 border border-success/30 disabled:text-foreground/50 text-success font-bold py-3 rounded-xl transition-all shadow-sm"
                 >
-                  {submitting ? "Registrando..." : "Confirmar pago"}
+                  {submitting ? "Registrando..." : "Registrar sin imprimir"}
+                </button>
+                <button
+                  onClick={() => handleRegisterPayment(true)}
+                  disabled={submitting}
+                  className="flex-1 bg-success hover:brightness-125 disabled:bg-surface disabled:text-foreground/50 text-foreground font-bold py-3 rounded-xl transition-all shadow-md flex items-center justify-center gap-2"
+                >
+                  <Printer size={17} /> {submitting ? "Registrando..." : "Registrar e imprimir"}
                 </button>
               </div>
             </div>
           </div>
         )}
+        <AccountTicket ticket={accountTicket} />
       </div>
     );
   }
@@ -386,8 +479,9 @@ export function CuentasCorrientesView() {
           placeholder="Buscar por nombre o DNI..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-surface text-foreground placeholder-foreground/60 rounded-xl pl-12 pr-4 py-3 md:py-4 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all font-medium"
+          className="w-full bg-surface text-foreground placeholder-foreground/60 rounded-xl pl-12 pr-12 py-3 md:py-4 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all font-medium"
         />
+        {search && <button type="button" onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-foreground/45 hover:text-foreground rounded-full" title="Limpiar búsqueda" aria-label="Limpiar búsqueda"><X size={18} /></button>}
       </div>
 
       {filtered.length === 0 ? (
@@ -430,7 +524,8 @@ export function CuentasCorrientesView() {
         </div>
       )}
       </>}
-      {newCustomerModal && <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"><div className="bg-background rounded-2xl w-full max-w-md border border-surface shadow-2xl"><div className="p-6 border-b border-surface flex justify-between"><h2 className="text-primary font-bold text-xl">Nuevo Cliente</h2><button onClick={() => setNewCustomerModal(false)}><X size={22}/></button></div><div className="p-6 space-y-4"><label className="block text-sm font-bold">Nombre del cliente<input value={newCustomer.name} onChange={(e) => setNewCustomer((p) => ({ ...p, name: e.target.value }))} className="mt-2 w-full bg-surface rounded-xl px-4 py-3 border border-foreground/15" /></label><label className="block text-sm font-bold">DNI<input value={newCustomer.document} onChange={(e) => setNewCustomer((p) => ({ ...p, document: e.target.value.replace(/\D/g, "") }))} className="mt-2 w-full bg-surface rounded-xl px-4 py-3 border border-foreground/15" /></label><label className="block text-sm font-bold">Monto que adeuda<input value={newCustomer.initialDebt} inputMode="decimal" onChange={(e) => setNewCustomer((p) => ({ ...p, initialDebt: e.target.value.replace(/[^0-9.]/g, "") }))} className="mt-2 w-full bg-surface rounded-xl px-4 py-3 border border-foreground/15" /></label></div><div className="p-6 border-t border-surface flex gap-3"><button onClick={() => setNewCustomerModal(false)} className="flex-1 bg-surface font-bold py-3 rounded-xl">Cancelar</button><button disabled={submitting} onClick={handleCreateCustomer} className="flex-1 bg-secondary font-bold py-3 rounded-xl">{submitting ? "Guardando..." : "Registrar cliente"}</button></div></div></div>}
+      {newCustomerModal && <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"><div className="bg-background rounded-2xl w-full max-w-md border border-surface shadow-2xl"><div className="p-6 border-b border-surface flex justify-between"><h2 className="text-primary font-bold text-xl">Nuevo Cliente</h2><button onClick={() => setNewCustomerModal(false)}><X size={22}/></button></div><div className="p-6 space-y-4"><label className="block text-sm font-bold">Nombre del cliente<input value={newCustomer.name} onChange={(e) => setNewCustomer((p) => ({ ...p, name: e.target.value }))} className="mt-2 w-full bg-surface rounded-xl px-4 py-3 border border-foreground/15" /></label><label className="block text-sm font-bold">DNI<input value={newCustomer.document} onChange={(e) => setNewCustomer((p) => ({ ...p, document: e.target.value.replace(/\D/g, "") }))} className="mt-2 w-full bg-surface rounded-xl px-4 py-3 border border-foreground/15" /></label><label className="block text-sm font-bold">Monto que adeuda<input value={newCustomer.initialDebt} inputMode="decimal" onChange={(e) => setNewCustomer((p) => ({ ...p, initialDebt: e.target.value.replace(/[^0-9.]/g, "") }))} className="mt-2 w-full bg-surface rounded-xl px-4 py-3 border border-foreground/15" /></label></div><div className="p-6 border-t border-surface flex flex-col sm:flex-row gap-3"><button onClick={() => setNewCustomerModal(false)} className="flex-1 bg-surface font-bold py-3 rounded-xl">Cancelar</button><button disabled={submitting} onClick={() => handleCreateCustomer(false)} className="flex-1 bg-surface border border-foreground/15 font-bold py-3 rounded-xl">{submitting ? "Guardando..." : "Registrar sin imprimir"}</button><button disabled={submitting || Number(newCustomer.initialDebt) <= 0} onClick={() => handleCreateCustomer(true)} className="flex-1 bg-secondary font-bold py-3 rounded-xl flex items-center justify-center gap-2"><Printer size={16}/>{submitting ? "Guardando..." : "Registrar e imprimir"}</button></div></div></div>}
+      <AccountTicket ticket={accountTicket} />
     </div>
   );
 }

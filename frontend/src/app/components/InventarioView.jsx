@@ -155,8 +155,9 @@ function ProductCategoryCombobox({ categories, value, onChange }) {
           aria-activedescendant={isOpen ? `product-category-option-${safeActiveIndex}` : undefined}
           aria-autocomplete="list"
           placeholder="Buscar categoría..."
-          className="w-full bg-surface text-foreground placeholder-foreground/60 font-medium rounded-xl pl-11 pr-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+          className="w-full bg-surface text-foreground placeholder-foreground/60 font-medium rounded-xl pl-11 pr-11 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
         />
+        {query && <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setQuery(""); setIsOpen(true); }} className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-foreground/45 hover:text-foreground rounded-full" title="Limpiar búsqueda" aria-label="Limpiar búsqueda"><X size={17} /></button>}
       </div>
       {selectedCategory && (
         <div className="mt-2 flex items-center justify-between gap-2 text-sm">
@@ -366,18 +367,41 @@ export function InventarioView() {
     toast.success(`Producto encontrado: ${product.name}`);
   }, []);
 
+  const openInactiveProduct = useCallback((product) => {
+    setProductModal({
+      isOpen: true,
+      item: toModalItem({ ...product, isAvailable: true }),
+      isNew: false,
+    });
+    setSearchTerm("");
+    toast.info("Producto encontrado en productos dados de baja", {
+      description: "Revisá sus datos y guardalo para volver a activarlo.",
+      duration: 7000,
+    });
+  }, []);
+
   const findProductByBarcode = useCallback((code) => {
     return inventoryByBarcode.get(String(code));
   }, [inventoryByBarcode]);
 
-  const handleBarcodeScan = useCallback((code) => {
+  const handleBarcodeScan = useCallback(async (code) => {
     const product = findProductByBarcode(code);
     if (product) {
       openEditProduct(product);
-    } else {
-      openNewProductWithBarcode(code);
+      return;
     }
-  }, [findProductByBarcode, openEditProduct, openNewProductWithBarcode]);
+
+    try {
+      const response = await api.get(`/products/by-barcode/${encodeURIComponent(code)}?includeInactive=true`);
+      openInactiveProduct(response.data);
+    } catch (error) {
+      if (error.response?.status === 404) {
+        openNewProductWithBarcode(code);
+      } else {
+        toast.error(error.response?.data?.message || "No se pudo verificar el código de barras");
+      }
+    }
+  }, [findProductByBarcode, openEditProduct, openInactiveProduct, openNewProductWithBarcode]);
 
   useBarcodeScanner({
     onScan: handleBarcodeScan,
@@ -390,12 +414,7 @@ export function InventarioView() {
     if (!/^\d+$/.test(code)) return;
 
     e.preventDefault();
-    const product = findProductByBarcode(code);
-    if (product) {
-      openEditProduct(product);
-    } else {
-      openNewProductWithBarcode(code);
-    }
+    handleBarcodeScan(code);
   };
 
   const handleDeleteProduct = async () => {
@@ -461,19 +480,19 @@ export function InventarioView() {
       if (productModal.isNew) {
         const response = await api.post("/products", payload);
         savedProduct = response.data;
-        toast.success("Producto creado exitosamente");
+        toast.success(savedProduct.reactivated ? "Producto recuperado y activado nuevamente" : "Producto creado exitosamente");
       } else {
         const response = await api.put(`/products/${productModal.item.id}`, {
           ...payload,
           recordStockModification: true,
         });
         savedProduct = response.data;
-        toast.success("Producto actualizado exitosamente");
+        toast.success(savedProduct.reactivated ? "Producto recuperado y activado nuevamente" : "Producto actualizado exitosamente");
       }
 
-      setInventory((current) => productModal.isNew
-        ? [...current, savedProduct]
-        : current.map((product) => product.id === savedProduct.id ? savedProduct : product));
+      setInventory((current) => current.some((product) => product.id === savedProduct.id)
+        ? current.map((product) => product.id === savedProduct.id ? savedProduct : product)
+        : [...current, savedProduct]);
       clearProductDraft();
       setProductModal({ isOpen: false, item: null, isNew: false });
     } catch (err) {
@@ -655,8 +674,9 @@ export function InventarioView() {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             onKeyDown={handleSearchKeyDown}
-            className="w-full bg-surface text-foreground placeholder-foreground/60 font-medium rounded-xl pl-12 pr-12 py-3 md:py-4 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all"
+            className="w-full bg-surface text-foreground placeholder-foreground/60 font-medium rounded-xl pl-12 pr-20 py-3 md:py-4 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all"
           />
+          {searchTerm && <button type="button" onClick={() => setSearchTerm("")} className="absolute right-11 top-1/2 -translate-y-1/2 p-1 text-foreground/45 hover:text-foreground rounded-full" title="Limpiar búsqueda" aria-label="Limpiar búsqueda"><X size={18} /></button>}
           <ScanBarcode className="absolute right-4 top-1/2 -translate-y-1/2 text-foreground/40" size={20} title="Escaneá para abrir edición" />
         </div>
         <div className="flex gap-2 shrink-0 flex-wrap"><button onClick={() => setPromotionModalOpen(true)} className="bg-primary hover:brightness-110 text-foreground font-bold px-4 py-3 md:py-4 rounded-xl flex items-center justify-center gap-2 transition-all text-sm shadow-md"><Tags size={18} /> Nueva Promoción</button><button onClick={() => setExtractionModalOpen(true)} className="bg-surface border border-foreground/20 hover:bg-background text-foreground font-bold px-4 py-3 md:py-4 rounded-xl flex items-center justify-center gap-2 transition-all text-sm shadow-md"><PackageMinus size={18} /> Extraer productos</button><button onClick={handleAddProduct} className="bg-secondary hover:brightness-125 text-foreground font-bold px-5 py-3 md:py-4 rounded-xl flex items-center justify-center gap-2 transition-all text-sm md:text-base shadow-md shadow-secondary/20"><Plus size={20} /> Nuevo Producto</button></div>
@@ -688,8 +708,9 @@ export function InventarioView() {
                 aria-activedescendant={categoryMenuOpen ? `category-filter-option-${activeCategoryOptionIndex}` : undefined}
                 aria-autocomplete="list"
                 placeholder="Buscar categoría..."
-                className="w-full bg-surface text-foreground placeholder-foreground/60 font-medium rounded-xl pl-11 pr-4 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+                className="w-full bg-surface text-foreground placeholder-foreground/60 font-medium rounded-xl pl-11 pr-11 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
               />
+              {categoryQuery && <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setCategoryQuery(""); setCategoryMenuOpen(true); }} className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-foreground/45 hover:text-foreground rounded-full" title="Limpiar búsqueda" aria-label="Limpiar búsqueda"><X size={17} /></button>}
             </div>
             {selectedCategory && (
               <div className="mt-2 flex items-center justify-between gap-2 text-sm">
@@ -799,7 +820,7 @@ export function InventarioView() {
 
       <div className="bg-surface rounded-xl overflow-hidden border border-foreground/15 shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1280px]">
+          <table className="w-full min-w-[1140px]">
             <thead>
               <tr className="border-b border-foreground/15">
                 <th className="p-4 w-10">
@@ -809,7 +830,6 @@ export function InventarioView() {
                 <th className="text-center text-foreground/80 font-bold p-4 whitespace-nowrap">Acciones</th>
                 <th className="text-left text-foreground/80 font-bold p-4 whitespace-nowrap">Cód. Barras</th>
                 <th className="text-left text-foreground/80 font-bold p-4">Categoría</th>
-                <th className="text-left text-foreground/80 font-bold p-4 whitespace-nowrap">Proveedor / Colección</th>
                 <th className="text-left text-foreground/80 font-bold p-4">Costo</th>
                 <th className="text-left text-foreground/80 font-bold p-4">Precio</th>
                 <th className="text-left text-foreground/80 font-bold p-4">Rentabilidad</th>
@@ -821,7 +841,7 @@ export function InventarioView() {
             <tbody>
               {paged.slice.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="p-8 text-center text-foreground/60 font-medium">
+                  <td colSpan={11} className="p-8 text-center text-foreground/60 font-medium">
                     No hay productos para mostrar
                   </td>
                 </tr>
@@ -840,7 +860,6 @@ export function InventarioView() {
                       <td className="p-3 text-center whitespace-nowrap"><div className="flex items-center justify-center gap-2"><button onClick={() => { setEditingPromotion(row); setPromotionModalOpen(true); }} className="text-primary hover:text-secondary transition-colors p-1" title="Editar promoción"><Edit2 size={18} /></button><button onClick={() => handleDeletePromotion(row)} className="text-foreground/60 hover:text-red-500 transition-colors p-1" title="Eliminar promoción"><Trash2 size={18} /></button></div></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
                       <td className="p-4 max-w-[140px]"><span className="text-foreground/40 font-medium text-sm">—</span></td>
-                      <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground font-bold">${formatCatalogPrice(row.cost || 0)}</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground font-black">${formatCatalogPrice(row.price)}</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
@@ -890,11 +909,6 @@ export function InventarioView() {
                       </span>
                     </td>
                     <td className="p-4 max-w-[140px]"><span className="text-foreground/80 font-medium block truncate">{product.category}</span></td>
-                    <td className="p-4 whitespace-nowrap">
-                      {product.priceGroupName
-                        ? <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold ${product.priceGroupType === "proveedor" ? "bg-primary/15 text-foreground" : "bg-primary/15 text-primary"}`}>{product.priceGroupName}</span>
-                        : <span className="text-foreground/40 font-medium text-sm">Sin grupo</span>}
-                    </td>
                     <td className="p-4 whitespace-nowrap">
                       <span className="text-foreground/80 font-medium">${Number(product.cost || 0).toFixed(2)}</span>
                     </td>

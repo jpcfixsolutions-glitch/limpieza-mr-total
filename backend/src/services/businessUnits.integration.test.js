@@ -208,6 +208,34 @@ test("la baja lógica oculta el catálogo de una sola unidad y conserva el histo
   await assert.doesNotReject(() => ProductService.remove(1, local), "la baja repetida es idempotente");
 });
 
+test("un código dado de baja recupera el producto existente sin crear un duplicado", async () => {
+  const inactive = await ProductService.getByCodbarra("1", local, true);
+  assert.equal(inactive.id, 1);
+  assert.equal(inactive.isAvailable, false);
+
+  const recovered = await ProductService.create({
+    name: "Producto propio recuperado",
+    codbarra: "1",
+    categoryId: 1,
+    cost: 10,
+    price: 20,
+    wholesalePrice: 17,
+    stock: 5,
+    minStock: 1,
+    isAvailable: true,
+    unitsPerPack: 1,
+    priceTiers: [],
+    fulfillmentMode: "OWN_STOCK",
+  }, local);
+
+  assert.equal(recovered.id, 1);
+  assert.equal(recovered.reactivated, true);
+  assert.equal(recovered.isAvailable, true);
+  assert.equal((await ProductService.getAll(local)).some((product) => product.id === 1), true);
+  const catalogRows = await client.execute("SELECT count(*) AS n FROM products WHERE cod_barra = '1'");
+  assert.equal(Number(catalogRows.rows[0].n), 1);
+});
+
 test("la baja de un producto migrado sin fila de inventario crea una baja controlada", async () => {
   await client.execute("INSERT INTO products (id, name, cod_barra, category_id, price_group_id, pack_type_id, cost, price, units_per_pack, pack_price, use_suggested_price, suggested_price_percent, stock, min_stock, icon, is_available, created_at) VALUES (3, 'Producto migrado', '3', 1, NULL, NULL, 7, 20, 1, NULL, 0, NULL, 2, 1, 'Package', 1, NULL)");
   await client.execute("INSERT INTO transaction_items (transaction_id, product_id, product_name, unit_cost, category_name, price, quantity, total, sale_mode, pack_size) VALUES (1, 3, 'Producto migrado', 7, 'General', 20, 1, 20, 'unitario', 1)");

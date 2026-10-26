@@ -76,15 +76,18 @@ export function CustomerPickerModal({ initialDocument = "", onClose, onSelect })
           <div>
             <label className="text-foreground/80 font-bold text-sm block mb-2">DNI / Documento</label>
             <div className="flex gap-2">
-              <input
-                type="text"
-                value={documentInput}
-                onChange={(e) => { setDocumentInput(e.target.value); resetSearch(); }}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                autoFocus
-                placeholder="Ej. 30123456"
-                className="flex-1 bg-surface text-foreground placeholder-foreground/50 font-bold rounded-xl px-4 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
-              />
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={documentInput}
+                  onChange={(e) => { setDocumentInput(e.target.value); resetSearch(); }}
+                  onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                  autoFocus
+                  placeholder="Ej. 30123456"
+                  className="w-full bg-surface text-foreground placeholder-foreground/50 font-bold rounded-xl pl-4 pr-11 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+                />
+                {documentInput && <button type="button" onClick={() => { setDocumentInput(""); resetSearch(); }} className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-foreground/45 hover:text-foreground rounded-full" title="Limpiar búsqueda" aria-label="Limpiar búsqueda"><X size={18} /></button>}
+              </div>
               <button
                 onClick={handleSearch}
                 disabled={!documentValue || searching}

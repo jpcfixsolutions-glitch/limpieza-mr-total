@@ -134,7 +134,7 @@ button:disabled {
 
 /* El ticket sólo existe visualmente durante la impresión. El diálogo nativo
    permite elegir cualquiera de las impresoras instaladas en el equipo. */
-.sale-ticket {
+.print-document {
   display: none;
 }
 
@@ -150,7 +150,7 @@ button:disabled {
     background: #fff;
   }
 
-  body > *:not(.sale-ticket) {
+  body > *:not(.print-document) {
     display: none !important;
   }
 
@@ -247,5 +247,208 @@ button:disabled {
     margin-top: 4mm;
     text-align: center;
     font-weight: 700;
+  }
+
+  .account-ticket__title {
+    margin-top: 2mm !important;
+    padding: 2mm 1mm;
+    border: 1px solid #000;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.4px;
+  }
+
+  .account-ticket__items {
+    margin: 2mm 0;
+  }
+
+  .account-ticket__items > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2mm;
+    margin-bottom: 1.5mm;
+  }
+
+  .account-ticket__items strong,
+  .account-ticket .sale-ticket__totals strong {
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  .account-ticket .sale-ticket__grand-total {
+    align-items: flex-end;
+    gap: 1mm;
+    font-size: 12px;
+  }
+
+  .account-ticket .sale-ticket__grand-total > :last-child {
+    flex-shrink: 0;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .a4-ticket {
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    width: 190mm;
+    min-height: 277mm;
+    background: #fff;
+    color: #000;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 10px;
+    line-height: 1.25;
+  }
+
+  .a4-ticket p {
+    margin: 1mm 0;
+  }
+
+  .a4-ticket__header {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12mm;
+    align-items: start;
+  }
+
+  .a4-ticket__brand img {
+    width: 66mm;
+    height: 32mm;
+    object-fit: contain;
+    object-position: left center;
+    margin-bottom: 4mm;
+  }
+
+  .a4-ticket__title-block h1 {
+    margin: 0 0 3mm;
+    padding: 7mm 4mm;
+    border: 1px solid #000;
+    text-align: center;
+    font-size: 24px;
+    font-weight: 500;
+    letter-spacing: 1px;
+  }
+
+  .a4-ticket__title-block > p {
+    text-align: center;
+    margin-bottom: 8mm;
+  }
+
+  .a4-ticket__tax-data {
+    margin-left: 8mm;
+  }
+
+  .a4-ticket__customer {
+    margin-top: 6mm;
+  }
+
+  .a4-ticket__customer-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    margin-bottom: 3mm;
+    border: 1px solid #000;
+  }
+
+  .a4-ticket__customer-row > div,
+  .a4-ticket__customer > p {
+    box-sizing: border-box;
+    min-height: 6mm;
+    padding: 1.2mm 2mm;
+  }
+
+  .a4-ticket__customer-row > div:last-child {
+    border-left: 1px solid #000;
+    text-align: right;
+  }
+
+  .a4-ticket__customer > p {
+    margin: 0 0 3mm;
+    border: 1px solid #000;
+  }
+
+  .a4-ticket__customer > p:last-child {
+    display: inline-block;
+    border: 0;
+    border-bottom: 1px solid #000;
+    padding-left: 0;
+  }
+
+  .a4-ticket__table {
+    width: 100%;
+    margin-top: 2mm;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .a4-ticket__table thead {
+    display: table-header-group;
+  }
+
+  .a4-ticket__table th {
+    padding: 1.5mm 1mm;
+    border: 1px solid #000;
+    font-size: 9px;
+    font-weight: 700;
+  }
+
+  .a4-ticket__table td {
+    padding: 1.3mm 1mm;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }
+
+  .a4-ticket__table th:first-child { width: 34%; text-align: left; }
+  .a4-ticket__table th:nth-child(2) { width: 16%; }
+  .a4-ticket__table th:nth-child(3) { width: 8%; }
+  .a4-ticket__table th:nth-child(4) { width: 14%; }
+  .a4-ticket__table th:nth-child(5) { width: 9%; }
+  .a4-ticket__table th:nth-child(6) { width: 19%; }
+  .a4-ticket__table td:not(:first-child) { text-align: right; }
+
+  .a4-ticket__summary {
+    width: 66mm;
+    margin: 5mm 0 0 auto;
+  }
+
+  .a4-ticket__summary > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 5mm;
+    padding: 1mm 2mm;
+  }
+
+  .a4-ticket__summary .a4-ticket__total {
+    margin-top: 2mm;
+    border: 1px solid #000;
+    font-size: 15px;
+  }
+
+  .a4-ticket__footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    gap: 12mm;
+    margin-top: auto;
+    padding-top: 15mm;
+  }
+
+  .a4-ticket__footer div {
+    flex: 1;
+  }
+
+  .a4-ticket__footer div span {
+    display: inline-block;
+    width: 65mm;
+    border-bottom: 1px solid #000;
+  }
+
+  .a4-ticket__footer > strong {
+    min-width: 38mm;
+    padding: 2mm 3mm;
+    border: 1px solid #000;
+    text-align: right;
+    font-size: 14px;
   }
 }

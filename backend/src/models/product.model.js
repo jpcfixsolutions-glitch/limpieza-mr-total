@@ -134,6 +134,16 @@ export const ProductModel = {
       .then((rows) => rows[0]);
   },
 
+  findByCodbarraForUnitIncludingInactive(codbarra, businessUnitId) {
+    return withJoins(db.select(contextualFields()).from(products)
+      .leftJoin(businessUnitProducts, and(
+        eq(businessUnitProducts.productId, products.id),
+        eq(businessUnitProducts.businessUnitId, businessUnitId)
+      )))
+      .where(eq(products.codbarra, codbarra))
+      .then((rows) => rows[0]);
+  },
+
   // Used only by logical deletion so repeated requests and legacy products
   // without an inventory row can be resolved without exposing them as active.
   findByIdForUnitIncludingInactive(id, businessUnitId) {

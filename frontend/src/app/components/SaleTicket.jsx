@@ -26,7 +26,7 @@ export function SaleTicket({ transaction }) {
   );
 
   return createPortal(
-    <section className="sale-ticket" aria-hidden="true">
+    <section className="print-document sale-ticket" aria-hidden="true">
       <header className="sale-ticket__header">
         <img src={logo} alt="Mr. Total Limpieza" className="sale-ticket__logo" />
         <h1>Mr. Total Limpieza</h1>

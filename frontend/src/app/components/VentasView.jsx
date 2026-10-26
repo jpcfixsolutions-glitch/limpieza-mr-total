@@ -17,6 +17,8 @@ import { normalizeProductSearch, searchProducts } from "../../utils/productSearc
 import { OpenCajaModal } from "./OpenCajaModal.jsx";
 import { PromotionCard } from "./PromotionCard.jsx";
 import { SaleTicket } from "./SaleTicket.jsx";
+import { A4SaleDocument } from "./A4SaleDocument.jsx";
+import { PrintOptionsModal } from "./PrintOptionsModal.jsx";
 
 export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaja, role, suggestedInitialCash = 0 }) {
   const [searchTerm, setSearchTerm] = useState("");
@@ -32,7 +34,8 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
   const [loading, setLoading] = useState(true);
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [page, setPage] = useState(1);
-  const [ticketToPrint, setTicketToPrint] = useState(null);
+  const [completedSale, setCompletedSale] = useState(null);
+  const [printJob, setPrintJob] = useState(null);
   const cartRef = useRef(cartItems);
   const saleRequestKeyRef = useRef(null);
   cartRef.current = cartItems;
@@ -79,9 +82,9 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
   useEffect(() => { setPage(1); }, [searchTerm, selectedCategory]);
 
   useEffect(() => {
-    if (!ticketToPrint) return undefined;
+    if (!printJob) return undefined;
 
-    const clearTicket = () => setTicketToPrint(null);
+    const clearTicket = () => setPrintJob(null);
     const printTimer = window.setTimeout(() => window.print(), 150);
     window.addEventListener("afterprint", clearTicket, { once: true });
 
@@ -89,7 +92,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
       window.clearTimeout(printTimer);
       window.removeEventListener("afterprint", clearTicket);
     };
-  }, [ticketToPrint]);
+  }, [printJob]);
 
   const paged = paginate(filteredProducts, page);
 
@@ -151,6 +154,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
         id: product.id,
         productId: product.id,
         name: product.name,
+        code: product.codbarra || "",
         saleMode: mode,
         price,
         unitsEach,
@@ -189,7 +193,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
 
   useBarcodeScanner({
     onScan: handleBarcodeScan,
-    enabled: isCajaOpen && !showPaymentModal && !showExpenseModal && !showOpenModal && !showMobileCart,
+    enabled: isCajaOpen && !showPaymentModal && !showExpenseModal && !showOpenModal && !showMobileCart && !completedSale && !printJob,
   });
 
   const handleSearchKeyDown = (e) => {
@@ -260,6 +264,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
         productId: item.promotionId ? null : (item.productId ?? item.id),
         promotionId: item.promotionId || null,
         name: item.name,
+        code: item.code || "",
         price: item.price,
         quantity: item.quantity,
         total: Number(item.price) * Number(item.quantity) * netFactor,
@@ -270,7 +275,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
 
     try {
       const savedTransaction = await onAddTransaction(transaction);
-      setTicketToPrint({
+      setCompletedSale({
         ...transaction,
         ...savedTransaction,
         customerName: transaction.customerName,
@@ -373,8 +378,9 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               onKeyDown={handleSearchKeyDown}
-              className="w-full bg-surface text-foreground placeholder-foreground/60 rounded-xl pl-12 pr-12 py-3 md:py-4 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all font-medium"
+              className="w-full bg-surface text-foreground placeholder-foreground/60 rounded-xl pl-12 pr-20 py-3 md:py-4 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all font-medium"
             />
+            {searchTerm && <button type="button" onClick={() => setSearchTerm("")} className="absolute right-11 top-1/2 -translate-y-1/2 p-1 text-foreground/45 hover:text-foreground rounded-full" title="Limpiar búsqueda" aria-label="Limpiar búsqueda"><X size={18} /></button>}
             <ScanBarcode className="absolute right-4 top-1/2 -translate-y-1/2 text-foreground/40" size={20} title="Pistola lectora activa" />
           </div>
           {isCajaOpen && (
@@ -481,7 +487,23 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
         onConfirm={handleConfirmOpen}
         suggestedAmount={suggestedInitialCash}
       />
-      <SaleTicket transaction={ticketToPrint} />
+      {completedSale && (
+        <PrintOptionsModal
+          key={completedSale.id}
+          transaction={completedSale}
+          onClose={() => setCompletedSale(null)}
+          onPrintThermal={() => {
+            setPrintJob({ format: "thermal", transaction: completedSale });
+            setCompletedSale(null);
+          }}
+          onPrintA4={(details) => {
+            setPrintJob({ format: "a4", transaction: { ...completedSale, ...details } });
+            setCompletedSale(null);
+          }}
+        />
+      )}
+      <SaleTicket transaction={printJob?.format === "thermal" ? printJob.transaction : null} />
+      <A4SaleDocument transaction={printJob?.format === "a4" ? printJob.transaction : null} />
     </div>
   );
 }

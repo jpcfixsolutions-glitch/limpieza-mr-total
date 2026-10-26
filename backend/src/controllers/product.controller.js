@@ -13,7 +13,8 @@ export const ProductController = {
 
   async getByCodbarra(req, res) {
     try {
-      const product = await ProductService.getByCodbarra(req.params.codbarra, req.businessUnit);
+      const includeInactive = req.query.includeInactive === "true" && req.user?.role === "admin";
+      const product = await ProductService.getByCodbarra(req.params.codbarra, req.businessUnit, includeInactive);
       res.json(product);
     } catch (err) {
       sendControllerError(res, err);

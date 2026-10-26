@@ -4,7 +4,7 @@ import { roundPriceUpToTen } from "../constants.js";
 import { getArgentinaTime } from "../db/timeUtils.js";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { businessUnitProducts, productPriceTiers, products, stockModifications } from "../db/schema.js";
+import { businessUnitProducts, inventoryMovements, productPriceTiers, products, stockModifications } from "../db/schema.js";
 import { adjustInventoryInTransaction, ensureInventoryBalance } from "./inventory.service.js";
 
 function normalizeCodbarra(value) {
@@ -111,12 +111,14 @@ export const ProductService = {
       : await ProductModel.findAll());
   },
 
-  async getByCodbarra(codbarra, businessUnit = null) {
+  async getByCodbarra(codbarra, businessUnit = null, includeInactive = false) {
     const normalized = normalizeCodbarra(codbarra);
     if (!normalized) throw { status: 400, message: "Código de barras inválido." };
 
     const product = businessUnit?.id
-      ? await ProductModel.findByCodbarraForUnit(normalized, businessUnit.id)
+      ? includeInactive
+        ? await ProductModel.findByCodbarraForUnitIncludingInactive(normalized, businessUnit.id)
+        : await ProductModel.findByCodbarraForUnit(normalized, businessUnit.id)
       : await ProductModel.findByCodbarra(normalized);
     if (!product) throw { status: 404, message: "Producto no encontrado con ese código de barras." };
     return attachTiers(product);
@@ -138,6 +140,35 @@ export const ProductService = {
       const normalizedWholesalePrice = normalizeCatalogPrice(wholesalePrice ?? 0, "El precio mayorista");
       const mode = businessUnit.code === "LOCAL" && fulfillmentMode === "WAREHOUSE_DIRECT"
         ? "WAREHOUSE_DIRECT" : "OWN_STOCK";
+
+      if (normalizedCodbarra) {
+        const existing = await ProductModel.findByCodbarraForUnitIncludingInactive(normalizedCodbarra, businessUnit.id);
+        if (existing?.isAvailable) {
+          throw { status: 409, message: `Ya existe un producto con el código de barras ${normalizedCodbarra}.` };
+        }
+        if (existing) {
+          const reactivated = await ProductService.update(existing.id, {
+            name,
+            codbarra: normalizedCodbarra,
+            categoryId,
+            priceGroupId,
+            packTypeId,
+            cost: normalizedCost,
+            price: normalizedPrice,
+            wholesalePrice: normalizedWholesalePrice,
+            stock: inventoryStock,
+            minStock: inventoryMin,
+            isAvailable: true,
+            unitsPerPack: pack.unitsPerPack,
+            packPrice: pack.packPrice,
+            priceTiers: tiers,
+            fulfillmentMode: mode,
+            recordStockModification: true,
+          }, businessUnit);
+          return { ...reactivated, reactivated: true };
+        }
+      }
+
       try {
         const productId = await db.transaction(async (tx) => {
           const [created] = await tx.insert(products).values({
@@ -200,7 +231,7 @@ export const ProductService = {
 
   async update(id, updates, businessUnit = null, userId = null) {
     const product = businessUnit?.id
-      ? await ProductModel.findByIdForUnit(Number(id), businessUnit.id)
+      ? await ProductModel.findByIdForUnitIncludingInactive(Number(id), businessUnit.id)
       : await ProductModel.findById(id);
     if (!product) throw { status: 404, message: "Producto no encontrado." };
 
@@ -286,6 +317,67 @@ export const ProductService = {
         if ("minStock" in updates) catalogFields.minStock = inventoryFields.minStock;
         if ("isAvailable" in updates) catalogFields.isAvailable = inventoryFields.isAvailable;
       }
+      if (businessUnit.code === "LOCAL" && "stock" in updates) catalogFields.stock = normalizeStock(updates.stock);
+
+      if (!product.isAvailable && updates.isAvailable !== false) {
+        const targetStock = "stock" in inventoryFields ? inventoryFields.stock : Number(product.stock || 0);
+        const restoredInventory = {
+          stock: targetStock,
+          minStock: inventoryFields.minStock ?? Number(product.minStock || 0),
+          cost: inventoryFields.cost ?? Number(product.cost || 0),
+          salePrice: inventoryFields.salePrice ?? Number(product.price || 0),
+          wholesalePrice: inventoryFields.wholesalePrice ?? Number(product.wholesalePrice || 0),
+          isAvailable: true,
+          fulfillmentMode: inventoryFields.fulfillmentMode || product.fulfillmentMode || "OWN_STOCK",
+          updatedAt: getArgentinaTime().datetime,
+        };
+        const queries = [
+          db.insert(businessUnitProducts).values({
+            businessUnitId: businessUnit.id,
+            productId: Number(id),
+            ...restoredInventory,
+          }).onConflictDoUpdate({
+            target: [businessUnitProducts.businessUnitId, businessUnitProducts.productId],
+            set: restoredInventory,
+          }),
+        ];
+        if (Object.keys(catalogFields).length) {
+          queries.push(db.update(products).set(catalogFields).where(eq(products.id, Number(id))));
+        }
+        if (nextTiers !== null) {
+          queries.push(db.delete(productPriceTiers).where(eq(productPriceTiers.productId, Number(id))));
+          if (nextTiers.length) {
+            queries.push(db.insert(productPriceTiers).values(nextTiers.map((tier) => ({ ...tier, productId: Number(id) }))));
+          }
+        }
+        if (targetStock !== Number(product.stock || 0)) {
+          queries.push(db.insert(inventoryMovements).values({
+            businessUnitId: businessUnit.id,
+            productId: Number(id),
+            movementType: "PRODUCT_REACTIVATION",
+            direction: targetStock > Number(product.stock || 0) ? "IN" : "OUT",
+            quantity: Math.abs(targetStock - Number(product.stock || 0)),
+            unitCost: restoredInventory.cost,
+            stockBefore: Number(product.stock || 0),
+            stockAfter: targetStock,
+            sourceType: "product_reactivation",
+            sourceId: String(id),
+            idempotencyKey: `reactivate:${businessUnit.id}:${id}:${Date.now()}:${Math.random()}`,
+            userId,
+            notes: "Reactivación de producto dado de baja",
+            createdAt: getArgentinaTime().datetime,
+          }));
+        }
+        if (stockModification && businessUnit.code === "LOCAL") {
+          queries.push(db.insert(stockModifications).values(stockModification));
+        }
+        // La reactivación parte de un registro ya existente. Se ejecutan las
+        // escrituras validadas en orden para evitar el bloqueo de SQLite que
+        // produce un UPSERT dentro de un batch al recuperar filas inactivas.
+        for (const query of queries) await query;
+        return { ...(await attachTiers(await ProductModel.findByIdForUnit(Number(id), businessUnit.id))), reactivated: true };
+      }
+
       try {
         await db.transaction(async (tx) => {
           const balance = await ensureInventoryBalance(tx, businessUnit.id, Number(id));
@@ -310,7 +402,6 @@ export const ProductService = {
             await tx.update(businessUnitProducts).set({ ...inventoryFields, updatedAt: getArgentinaTime().datetime })
               .where(and(eq(businessUnitProducts.businessUnitId, businessUnit.id), eq(businessUnitProducts.productId, Number(id))));
           }
-          if (businessUnit.code === "LOCAL" && "stock" in updates) catalogFields.stock = normalizeStock(updates.stock);
           if (Object.keys(catalogFields).length) await tx.update(products).set(catalogFields).where(eq(products.id, Number(id)));
           if (nextTiers !== null) {
             await tx.delete(productPriceTiers).where(eq(productPriceTiers.productId, Number(id)));

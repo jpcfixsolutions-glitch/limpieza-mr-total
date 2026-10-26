@@ -119,6 +119,7 @@ export const CustomerService = {
         methodName: movement.methodName,
         transactionId: movement.transactionId,
         createdAt: movement.createdAt,
+        description: movement.type === "pago" ? movement.detail : null,
         items: movement.type === "cargo" ? items : [],
         isReversal: movement.type === "reversion_cargo",
       });

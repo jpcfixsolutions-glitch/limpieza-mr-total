@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Printer, Tag, NotebookPen, IdCard } from "lucide-react";
+import { X, Check, Tag, NotebookPen, IdCard } from "lucide-react";
 import { CustomerPickerModal } from "./CustomerPickerModal.jsx";
 import { ACCOUNT_METHOD_NAME } from "../constants.js";
 
@@ -440,8 +440,8 @@ export function PaymentModal({ total, paymentMethods, onClose, onConfirm }) {
             disabled={!canConfirm || submitting}
             className="flex-1 bg-secondary hover:brightness-125 disabled:bg-surface disabled:text-foreground/50 disabled:cursor-not-allowed text-foreground font-bold py-4 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-secondary/20"
           >
-            <Printer size={20} />
-            {submitting ? "Registrando..." : change > 0 ? `Confirmar e Imprimir — Vuelto $${change.toFixed(2)}` : "Confirmar e Imprimir Ticket"}
+            <Check size={20} />
+            {submitting ? "Registrando..." : change > 0 ? `Confirmar venta — Vuelto $${change.toFixed(2)}` : "Confirmar venta"}
           </button>
         </div>
       </div>
