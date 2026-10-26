@@ -193,6 +193,14 @@ button:disabled {
     margin: 2mm 0;
   }
 
+  .sale-ticket__sale-date {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 2mm;
+    white-space: nowrap;
+  }
+
   .sale-ticket__divider {
     border-top: 1px dashed #000;
     margin: 2mm 0;

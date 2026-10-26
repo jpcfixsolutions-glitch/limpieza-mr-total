@@ -34,8 +34,10 @@ export function SaleTicket({ transaction }) {
       </header>
 
       <div className="sale-ticket__meta">
-        <p><strong>Venta:</strong> #{transaction.id}</p>
-        <p><strong>Fecha:</strong> {[transaction.date, transaction.time].filter(Boolean).join(" · ")}</p>
+        <p className="sale-ticket__sale-date">
+          <span><strong>Fecha:</strong> {[transaction.date, transaction.time].filter(Boolean).join(" · ")}</span>
+          <span><strong>Venta:</strong> #{transaction.id}</span>
+        </p>
         {transaction.customerName && <p><strong>Cliente:</strong> {transaction.customerName}</p>}
       </div>
 
