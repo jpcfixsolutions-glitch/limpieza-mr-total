@@ -141,6 +141,15 @@ test("flujos multiunidad, idempotencia, reversiones y concurrencia", async (t) =
     assert.equal(await stock(1, 1), 12); assert.equal(await stock(2, 1), 16);
     assert.equal(sale.items[0].saleMode, "mayorista");
     assert.equal(sale.items[0].price, 17);
+
+    const printableSale = await TransactionService.getById(sale.id, local);
+    assert.equal(printableSale.id, sale.id);
+    assert.equal(printableSale.payments[0].methodName, "Efectivo");
+    assert.equal(printableSale.items[0].productName, "Producto propio");
+    await assert.rejects(
+      () => TransactionService.getById(sale.id, warehouse),
+      (error) => error.status === 400
+    );
   });
 
   await t.test("abastecimiento directo descuenta exactamente una vez el Galpón", async () => {

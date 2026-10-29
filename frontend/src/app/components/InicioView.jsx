@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { TrendingUp, Activity, Clock, Lock, Unlock, Receipt, Package, Wallet, BookUp, PackageMinus, X } from "lucide-react";
+import { TrendingUp, Activity, Clock, Lock, Unlock, Receipt, Package, Wallet, BookUp, PackageMinus, X, Printer } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../services/api.js";
 import { Loader } from "./Loader.jsx";
@@ -7,6 +7,10 @@ import { formatStock } from "../../utils/pack.js";
 import { ACCOUNT_METHOD_NAME } from "../constants.js";
 import { ClosureModal } from "./ClosureModal.jsx";
 import { OpenCajaModal } from "./OpenCajaModal.jsx";
+import { PrintOptionsModal } from "./PrintOptionsModal.jsx";
+import { SaleTicket } from "./SaleTicket.jsx";
+import { A4SaleDocument } from "./A4SaleDocument.jsx";
+import { useSalePrinting } from "../hooks/useSalePrinting.js";
 
 export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, suggestedInitialCash = 0 }) {
   const [showOpenModal, setShowOpenModal] = useState(false);
@@ -25,6 +29,15 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
   const [registerData, setRegisterData] = useState(null);
   const [gastosEfectivo, setGastosEfectivo] = useState(0);
   const [cobrosCuenta, setCobrosCuenta] = useState([]);
+  const {
+    printTransaction,
+    printJob,
+    loadingPrintId,
+    openSalePrintOptions,
+    closePrintOptions,
+    startThermalPrint,
+    startA4Print,
+  } = useSalePrinting();
 
   const LOG_ICONS = {
     Unlock,
@@ -232,7 +245,19 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
                           <p className="text-foreground/70 font-medium text-sm">{sale.date ? `${sale.date} • ` : ""}{sale.time} • {sale.itemCount} producto{sale.itemCount !== 1 ? "s" : ""}</p>
                         </div>
                       </div>
-                      <span className="text-foreground font-black text-lg">+${sale.total.toFixed(2)}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-foreground font-black text-lg">+${sale.total.toFixed(2)}</span>
+                        <button
+                          type="button"
+                          onClick={() => openSalePrintOptions(sale.id)}
+                          disabled={loadingPrintId === String(sale.id)}
+                          className="text-secondary hover:text-foreground disabled:text-foreground/30 p-2 rounded-lg hover:bg-surface transition-colors"
+                          title="Imprimir comprobante"
+                          aria-label={`Imprimir venta ${sale.id}`}
+                        >
+                          <Printer size={19} />
+                        </button>
+                      </div>
                     </div>
                     <div className="ml-0 sm:ml-14 rounded-lg p-3 border border-foreground/15 bg-background space-y-3">
                       <div>
@@ -438,6 +463,18 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
           </div>
         </div>
       )}
+
+      {printTransaction && (
+        <PrintOptionsModal
+          key={printTransaction.id}
+          transaction={printTransaction}
+          onClose={closePrintOptions}
+          onPrintThermal={startThermalPrint}
+          onPrintA4={startA4Print}
+        />
+      )}
+      <SaleTicket transaction={printJob?.format === "thermal" ? printJob.transaction : null} />
+      <A4SaleDocument transaction={printJob?.format === "a4" ? printJob.transaction : null} />
     </div>
   );
 }

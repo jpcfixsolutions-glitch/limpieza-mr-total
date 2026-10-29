@@ -1,9 +1,12 @@
-import { useState } from "react";
-import { X, Search, UserPlus, IdCard } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { X, Search, UserPlus, IdCard, Users } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../services/api.js";
 
 export function CustomerPickerModal({ initialDocument = "", onClose, onSelect }) {
+  const [customers, setCustomers] = useState([]);
+  const [listSearch, setListSearch] = useState("");
+  const [loadingCustomers, setLoadingCustomers] = useState(true);
   const [documentInput, setDocumentInput] = useState(initialDocument);
   const [searching, setSearching] = useState(false);
   const [found, setFound] = useState(null);
@@ -12,6 +15,30 @@ export function CustomerPickerModal({ initialDocument = "", onClose, onSelect })
   const [creating, setCreating] = useState(false);
 
   const documentValue = documentInput.trim();
+
+  useEffect(() => {
+    let active = true;
+    api.get("/customers")
+      .then(({ data }) => {
+        if (active) setCustomers(Array.isArray(data) ? data : []);
+      })
+      .catch((err) => {
+        if (active) toast.error(err.response?.data?.message || "No se pudieron cargar las cuentas existentes");
+      })
+      .finally(() => {
+        if (active) setLoadingCustomers(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  const filteredCustomers = useMemo(() => {
+    const term = listSearch.trim().toLowerCase();
+    if (!term) return customers;
+    return customers.filter((customer) =>
+      `${customer.name} ${customer.lastName}`.toLowerCase().includes(term) ||
+      String(customer.document || "").toLowerCase().includes(term)
+    );
+  }, [customers, listSearch]);
 
   const handleSearch = async () => {
     if (!documentValue || searching) return;
@@ -62,7 +89,7 @@ export function CustomerPickerModal({ initialDocument = "", onClose, onSelect })
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
-      <div className="bg-background rounded-2xl w-full max-w-md border border-surface shadow-2xl">
+      <div className="bg-background rounded-2xl w-full max-w-2xl max-h-[92vh] border border-surface shadow-2xl flex flex-col">
         <div className="p-6 border-b border-surface flex items-center justify-between">
           <h2 className="text-primary font-bold text-xl flex items-center gap-2">
             <IdCard size={22} /> Cliente de la cuenta
@@ -72,7 +99,71 @@ export function CustomerPickerModal({ initialDocument = "", onClose, onSelect })
           </button>
         </div>
 
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-5 overflow-y-auto">
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-foreground font-black flex items-center gap-2">
+                <Users size={19} className="text-secondary" /> Cuentas existentes
+              </h3>
+              <span className="text-xs font-bold text-foreground/55">{customers.length} cuentas</span>
+            </div>
+
+            <div className="relative">
+              <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-foreground/45" />
+              <input
+                type="text"
+                value={listSearch}
+                onChange={(e) => setListSearch(e.target.value)}
+                autoFocus
+                placeholder="Buscar por nombre o DNI"
+                className="w-full bg-surface text-foreground placeholder-foreground/50 font-bold rounded-xl pl-11 pr-11 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
+              />
+              {listSearch && (
+                <button
+                  type="button"
+                  onClick={() => setListSearch("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-foreground/45 hover:text-foreground rounded-full"
+                  title="Limpiar búsqueda"
+                  aria-label="Limpiar búsqueda"
+                >
+                  <X size={18} />
+                </button>
+              )}
+            </div>
+
+            <div className="max-h-56 overflow-y-auto rounded-xl border border-foreground/15 divide-y divide-foreground/10 bg-surface/40">
+              {loadingCustomers ? (
+                <p className="p-5 text-center text-foreground/60 font-medium text-sm">Cargando cuentas...</p>
+              ) : filteredCustomers.length === 0 ? (
+                <p className="p-5 text-center text-foreground/60 font-medium text-sm">No se encontraron cuentas.</p>
+              ) : filteredCustomers.map((customer) => (
+                <button
+                  type="button"
+                  key={customer.id}
+                  onClick={() => onSelect(customer)}
+                  className="w-full px-4 py-3 text-left hover:bg-primary/10 transition-colors flex items-center justify-between gap-4"
+                >
+                  <span className="min-w-0">
+                    <span className="block font-black text-foreground truncate">{customer.name} {customer.lastName}</span>
+                    <span className="block text-xs font-medium text-foreground/60">DNI {customer.document}</span>
+                  </span>
+                  <span className="shrink-0 text-right">
+                    <span className="block text-[11px] font-bold uppercase text-foreground/50">Deuda actual</span>
+                    <span className="block font-black text-secondary">
+                      ${Number(customer.debt || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <div className="flex items-center gap-3 text-foreground/45">
+            <span className="h-px bg-foreground/15 flex-1" />
+            <span className="text-xs font-bold uppercase">Nueva cuenta o búsqueda exacta</span>
+            <span className="h-px bg-foreground/15 flex-1" />
+          </div>
+
           <div>
             <label className="text-foreground/80 font-bold text-sm block mb-2">DNI / Documento</label>
             <div className="flex gap-2">
@@ -82,7 +173,6 @@ export function CustomerPickerModal({ initialDocument = "", onClose, onSelect })
                   value={documentInput}
                   onChange={(e) => { setDocumentInput(e.target.value); resetSearch(); }}
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                  autoFocus
                   placeholder="Ej. 30123456"
                   className="w-full bg-surface text-foreground placeholder-foreground/50 font-bold rounded-xl pl-4 pr-11 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm transition-all"
                 />

@@ -1,11 +1,15 @@
 import { useState, useEffect, Fragment } from "react";
-import { Lock, Calendar, Clock, Unlock, Eye, EyeOff, Banknote, Calculator, FileText, CheckCircle2, TrendingUp, AlertTriangle } from "lucide-react";
+import { Lock, Calendar, Clock, Unlock, Eye, EyeOff, Banknote, Calculator, FileText, CheckCircle2, TrendingUp, AlertTriangle, Printer } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../services/api.js";
 import { Loader } from "./Loader.jsx";
 import { ACCOUNT_METHOD_NAME } from "../constants.js";
 import { ClosureModal } from "./ClosureModal.jsx";
 import { OpenCajaModal } from "./OpenCajaModal.jsx";
+import { PrintOptionsModal } from "./PrintOptionsModal.jsx";
+import { SaleTicket } from "./SaleTicket.jsx";
+import { A4SaleDocument } from "./A4SaleDocument.jsx";
+import { useSalePrinting } from "../hooks/useSalePrinting.js";
 
 export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onCloseCaja, transactions, onRefresh, suggestedInitialCash = 0 }) {
   const [showClosureModal, setShowClosureModal] = useState(false);
@@ -18,6 +22,15 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
   const [gastosEfectivo, setGastosEfectivo] = useState(0);
   const [cobrosCuenta, setCobrosCuenta] = useState([]);
   const [showIngresos, setShowIngresos] = useState(false);
+  const {
+    printTransaction,
+    printJob,
+    loadingPrintId,
+    openSalePrintOptions,
+    closePrintOptions,
+    startThermalPrint,
+    startA4Print,
+  } = useSalePrinting();
 
   useEffect(() => {
     if (role === "admin") {
@@ -385,9 +398,19 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
                                             {[transaction.date, transaction.time].filter(Boolean).join(" · ") || "Fecha no disponible"}
                                           </p>
                                         </div>
-                                        <p className="text-foreground font-black text-lg">
-                                          ${Number(transaction.total || 0).toFixed(2)}
-                                        </p>
+                                        <div className="flex items-center gap-3">
+                                          <p className="text-foreground font-black text-lg">
+                                            ${Number(transaction.total || 0).toFixed(2)}
+                                          </p>
+                                          <button
+                                            type="button"
+                                            onClick={() => openSalePrintOptions(transaction.id)}
+                                            disabled={loadingPrintId === String(transaction.id)}
+                                            className="bg-secondary hover:brightness-110 disabled:bg-foreground/15 text-foreground font-bold px-3 py-2 rounded-lg flex items-center gap-2 transition-all text-sm"
+                                          >
+                                            <Printer size={16} /> {loadingPrintId === String(transaction.id) ? "Cargando..." : "Imprimir"}
+                                          </button>
+                                        </div>
                                       </div>
 
                                       <div className="p-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.45fr)]">
@@ -524,6 +547,15 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
                         </td>
                         <td className="p-4 text-right text-foreground font-black">${Number(t.total).toFixed(2)}</td>
                         <td className="p-4 text-right">
+                          <button
+                            type="button"
+                            onClick={() => openSalePrintOptions(t.id)}
+                            disabled={loadingPrintId === String(t.id)}
+                            className="text-secondary hover:text-foreground disabled:text-foreground/30 transition-colors p-2"
+                            title="Imprimir comprobante"
+                          >
+                            <Printer size={20} />
+                          </button>
                           <button onClick={() => setExpandedId(expandedId === t.id ? null : t.id)} className="text-primary hover:text-secondary transition-colors p-2"><Eye size={20} /></button>
                         </td>
                       </tr>
@@ -575,6 +607,18 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
         onConfirm={handleConfirmOpen}
         suggestedAmount={suggestedInitialCash}
       />
+
+      {printTransaction && (
+        <PrintOptionsModal
+          key={printTransaction.id}
+          transaction={printTransaction}
+          onClose={closePrintOptions}
+          onPrintThermal={startThermalPrint}
+          onPrintA4={startA4Print}
+        />
+      )}
+      <SaleTicket transaction={printJob?.format === "thermal" ? printJob.transaction : null} />
+      <A4SaleDocument transaction={printJob?.format === "a4" ? printJob.transaction : null} />
     </div>
   );
 }

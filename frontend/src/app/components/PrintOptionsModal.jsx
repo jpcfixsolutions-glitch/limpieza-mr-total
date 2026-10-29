@@ -21,8 +21,8 @@ export function PrintOptionsModal({ transaction, onClose, onPrintThermal, onPrin
       <div className="bg-background rounded-2xl w-full max-w-xl border border-foreground/15 shadow-2xl overflow-hidden">
         <header className="p-6 border-b border-foreground/15 flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-primary font-black text-2xl">Venta #{transaction.id} confirmada</h2>
-            <p className="text-foreground/65 text-sm mt-1">Elegí si querés imprimir un comprobante.</p>
+            <h2 className="text-primary font-black text-2xl">Comprobante de venta #{transaction.id}</h2>
+            <p className="text-foreground/65 text-sm mt-1">Elegí el formato que querés imprimir.</p>
           </div>
           <button type="button" onClick={onClose} className="text-foreground/60 hover:text-foreground" title="No imprimir">
             <X size={24} />

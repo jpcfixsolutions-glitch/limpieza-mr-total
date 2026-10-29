@@ -1,4 +1,4 @@
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { transactions, transactionPayments, transactionItems } from "../db/schema.js";
 
@@ -15,8 +15,14 @@ export const TransactionModel = {
       .orderBy(desc(transactions.createdAt));
   },
 
-  findById(id) {
-    return db.select().from(transactions).where(eq(transactions.id, id)).then((r) => r[0]);
+  findById(id, businessUnitId = null) {
+    return db
+      .select()
+      .from(transactions)
+      .where(businessUnitId
+        ? and(eq(transactions.id, id), eq(transactions.businessUnitId, businessUnitId))
+        : eq(transactions.id, id))
+      .then((r) => r[0]);
   },
 
   createPayments(paymentsData) {

@@ -2,6 +2,14 @@ import { TransactionService } from "../services/transaction.service.js";
 import { sendControllerError } from "./controllerError.js";
 
 export const TransactionController = {
+  async getById(req, res) {
+    try {
+      res.json(await TransactionService.getById(req.params.id, req.businessUnit));
+    } catch (err) {
+      sendControllerError(res, err);
+    }
+  },
+
   async create(req, res) {
     try {
       const result = await TransactionService.create({

@@ -6,5 +6,6 @@ const router = Router();
 
 router.post("/", authenticate, TransactionController.create);
 router.get("/register/:registerId", authenticate, TransactionController.getByRegisterId);
+router.get("/:id", authenticate, TransactionController.getById);
 
 export default router;

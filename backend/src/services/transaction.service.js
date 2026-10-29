@@ -17,14 +17,37 @@ function positiveInteger(value, message) {
 }
 
 async function hydrateTransaction(transaction) {
+  const [accountCustomer, payments, items] = await Promise.all([
+    db
+      .select({ name: customers.name, lastName: customers.lastName })
+      .from(accountMovements)
+      .innerJoin(customers, eq(accountMovements.customerId, customers.id))
+      .where(eq(accountMovements.transactionId, transaction.id))
+      .then((rows) => rows[0]),
+    TransactionModel.findPaymentsByTransactionId(transaction.id),
+    TransactionModel.findItemsByTransactionId(transaction.id),
+  ]);
+
   return {
     ...transaction,
-    payments: await TransactionModel.findPaymentsByTransactionId(transaction.id),
-    items: await TransactionModel.findItemsByTransactionId(transaction.id),
+    customerName: accountCustomer
+      ? `${accountCustomer.name} ${accountCustomer.lastName || ""}`.trim()
+      : null,
+    payments,
+    items,
   };
 }
 
 export const TransactionService = {
+  async getById(id, businessUnit) {
+    if (!businessUnit || businessUnit.code !== "LOCAL") {
+      throw { status: 400, message: "Las ventas de caja sólo están disponibles en el Local." };
+    }
+    const transaction = await TransactionModel.findById(Number(id), businessUnit.id);
+    if (!transaction) throw { status: 404, message: "Venta no encontrada." };
+    return hydrateTransaction(transaction);
+  },
+
   async create({ total, payments, items, customerId, discountPercent, discountAmount, idempotencyKey }, userId, businessUnit) {
     if (!businessUnit || businessUnit.code !== "LOCAL") {
       throw { status: 400, message: "Las ventas de caja sólo pueden registrarse en el Local. Usá Pedidos para el Galpón." };
