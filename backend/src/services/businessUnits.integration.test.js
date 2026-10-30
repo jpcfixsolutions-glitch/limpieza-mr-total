@@ -62,8 +62,8 @@ before(async () => {
     "INSERT INTO cash_registers VALUES (1,1,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL)",
     "INSERT INTO customers (id,name,last_name,document,is_active,business_unit_id,is_internal) VALUES (1,'Cliente','Local','DUP',1,1,0),(2,'Cliente','Mayorista','DUP',1,2,0),(3,'Local','Mr.Total','INTERNAL-LOCAL',1,2,1)",
     "INSERT INTO payment_methods VALUES (1, 'Efectivo', 0)",
-    "INSERT INTO promotions VALUES (1, 'Promo mixta', NULL, 35, 1, NULL)",
-    "INSERT INTO promotion_items VALUES (1,1,1,1),(2,1,2,1)",
+    "INSERT INTO promotions VALUES (1, 'Promo mixta', NULL, 35, 1, NULL), (2, '3 productos por $50', NULL, 50, 1, NULL)",
+    "INSERT INTO promotion_items VALUES (1,1,1,1),(2,1,2,1),(3,2,1,3)",
   ], "write");
 });
 
@@ -172,11 +172,23 @@ test("flujos multiunidad, idempotencia, reversiones y concurrencia", async (t) =
     assert.equal(await stock(1, 1), 11); assert.equal(await stock(2, 2), 4); assert.equal(await stock(1, 2), 5);
   });
 
+  await t.test("una promoción puede ofrecer varias unidades del mismo producto", async () => {
+    const before = await stock(1, 1);
+    const sale = await TransactionService.create({
+      total: 50,
+      payments: [{ methodId: 1, type: "Efectivo", amount: 50, baseAmount: 50 }],
+      items: [{ promotionId: 2, quantity: 1, total: 50 }],
+      idempotencyKey: "sale-single-product-promo",
+    }, 1, local);
+    assert.equal(await stock(1, 1), before - 3);
+    assert.equal(JSON.parse(sale.items[0].promotionComposition)[0].quantity, 3);
+  });
+
   await t.test("solicitudes concurrentes no permiten stock negativo", async () => {
     const make = (key) => TransactionService.create({ total: 120, payments: cashPayment, items: [{ productId: 1, quantity: 6, price: 20, total: 120 }], idempotencyKey: key }, 1, local);
     const results = await Promise.allSettled([make("concurrent-a"), make("concurrent-b")]);
     assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
-    assert.equal(await stock(1, 1), 5);
+    assert.equal(await stock(1, 1), 2);
   });
 
   await t.test("las estadísticas permanecen separadas por unidad", async () => {
@@ -191,7 +203,7 @@ test("flujos multiunidad, idempotencia, reversiones y concurrencia", async (t) =
     assert.equal(localRestock.restockCost, localProfitability.summary.totalCost);
     assert.ok(localRestock.restockCost > 0);
     assert.equal(futureRestock.restockCost, 0);
-    assert.deepEqual(topProducts.map((product) => [product.productName, product.quantitySold]), [["Producto propio", 9], ["Producto directo", 4]]);
+    assert.deepEqual(topProducts.map((product) => [product.productName, product.quantitySold]), [["Producto propio", 12], ["Producto directo", 4]]);
     assert.equal(warehouseStats.stockUnits, (await stock(2, 1)) + (await stock(2, 2)));
   });
 });

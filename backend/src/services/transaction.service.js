@@ -9,6 +9,7 @@ import {
   promotionItems, promotions, transactionItems, transactionPayments, transactions,
 } from "../db/schema.js";
 import { adjustInventoryInTransaction, findBusinessUnitByCode } from "./inventory.service.js";
+import { isValidPromotionComposition } from "./promotion.rules.js";
 
 function positiveInteger(value, message) {
   const result = Number(value);
@@ -153,7 +154,7 @@ export const TransactionService = {
           const promotionId = Number(item.promotionId);
           const promotion = promotionById.get(promotionId);
           const definitions = definitionsByPromotion.get(promotionId) || [];
-          if (!promotion || !promotion.isAvailable || definitions.length < 2) throw { status: 400, message: "La promoción seleccionada no está disponible." };
+          if (!promotion || !promotion.isAvailable || !isValidPromotionComposition(definitions)) throw { status: 400, message: "La promoción seleccionada no está disponible." };
           for (const component of definitions) requireProduct(Number(component.productId), quantity * Number(component.quantity));
           const composition = definitions.map((component) => {
             const product = productById.get(Number(component.productId));

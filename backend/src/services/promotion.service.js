@@ -1,25 +1,7 @@
 import { PromotionModel } from "../models/promotion.model.js";
 import { ProductModel } from "../models/product.model.js";
 import { roundPriceUpToTen } from "../constants.js";
-
-function normalizeItems(items) {
-  if (!Array.isArray(items) || items.length < 2) {
-    throw { status: 400, message: "Una promoción debe incluir al menos 2 productos distintos." };
-  }
-  const seen = new Set();
-  return items.map((item) => {
-    const productId = Number(item?.productId);
-    const quantity = Number(item?.quantity);
-    if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(quantity) || quantity <= 0) {
-      throw { status: 400, message: "Los productos y cantidades de la promoción no son válidos." };
-    }
-    if (seen.has(productId)) {
-      throw { status: 400, message: "No se puede repetir un producto dentro de la promoción." };
-    }
-    seen.add(productId);
-    return { productId, quantity };
-  });
-}
+import { normalizePromotionItems } from "./promotion.rules.js";
 
 function attachAvailability(promotions, componentRows) {
   const componentsByPromotion = new Map();
@@ -59,7 +41,7 @@ export const PromotionService = {
     const cleanPrice = Number(price);
     if (!cleanName) throw { status: 400, message: "El nombre de la promoción es obligatorio." };
     if (!Number.isFinite(cleanPrice) || cleanPrice <= 0) throw { status: 400, message: "El precio de venta debe ser mayor a cero." };
-    const normalizedItems = normalizeItems(items);
+    const normalizedItems = normalizePromotionItems(items);
     const products = await Promise.all(normalizedItems.map((item) => ProductModel.findById(item.productId)));
     const missing = products.findIndex((product) => !product);
     if (missing >= 0) throw { status: 400, message: "Uno de los productos seleccionados ya no existe." };
@@ -81,7 +63,7 @@ export const PromotionService = {
     const cleanPrice = Number(price);
     if (!cleanName) throw { status: 400, message: "El nombre de la promoción es obligatorio." };
     if (!Number.isFinite(cleanPrice) || cleanPrice <= 0) throw { status: 400, message: "El precio de venta debe ser mayor a cero." };
-    const normalizedItems = normalizeItems(items);
+    const normalizedItems = normalizePromotionItems(items);
     const products = await Promise.all(normalizedItems.map((item) => ProductModel.findById(item.productId)));
     if (products.some((product) => !product)) throw { status: 400, message: "Uno de los productos seleccionados ya no existe." };
     await PromotionModel.update(Number(id), { name: cleanName, description: String(description || "").trim() || null, price: roundPriceUpToTen(cleanPrice) }, normalizedItems);
