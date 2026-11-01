@@ -331,7 +331,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
     <div className="flex-1 min-w-0 flex relative overflow-hidden">
       {loading && <Loader />}
       {!isCajaOpen && (
-        <div className="absolute inset-0 z-50 backdrop-blur-md bg-background/60 flex items-center justify-center p-4">
+        <div className="absolute inset-0 z-30 md:z-50 backdrop-blur-md bg-background/60 flex items-center justify-center p-4">
           <div className="bg-surface p-6 md:p-8 rounded-2xl border border-foreground/15 text-center max-w-sm md:max-w-md shadow-2xl w-full">
             <div className="w-14 h-14 md:w-16 md:h-16 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
               <Lock size={28} />
