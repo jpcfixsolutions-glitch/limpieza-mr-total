@@ -192,6 +192,21 @@ const migrations = [
     ],
   },
   {
+    id: "20261104_016_combined_account_payments",
+    statements: [
+      "ALTER TABLE account_movements ADD COLUMN idempotency_key TEXT",
+      `CREATE TABLE IF NOT EXISTS account_payment_details (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_movement_id INTEGER NOT NULL REFERENCES account_movements(id) ON DELETE CASCADE,
+        payment_method_id INTEGER REFERENCES payment_methods(id) ON DELETE SET NULL,
+        method_name TEXT NOT NULL,
+        amount REAL NOT NULL CHECK(amount > 0)
+      )`,
+      "CREATE INDEX IF NOT EXISTS account_payment_details_movement_idx ON account_payment_details (account_movement_id)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS account_movements_payment_idempotency_unique ON account_movements (business_unit_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
+    ],
+  },
+  {
     id: "20261011_011_transaction_discount_metadata",
     statements: [
       "ALTER TABLE transactions ADD COLUMN discount_percent REAL NOT NULL DEFAULT 0",

@@ -12,6 +12,7 @@ async function reset() {
     "product_extraction_items",
     "transaction_items",
     "transaction_payments",
+    "account_payment_details",
     "account_movements",
     "inventory_transfers",
     "inventory_movements",

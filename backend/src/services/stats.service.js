@@ -345,7 +345,7 @@ export const StatsService = {
           type: isReversal ? "Reversión de cargo" : isCharge ? "Cargo a cuenta" : "Cobro de cuenta",
           details: isReversal ? `${who} — reversión por $${Number(movement.amount).toFixed(2)}` : isCharge
             ? `${who} — $${Number(movement.amount).toFixed(2)} fiado`
-            : `${who} — $${Number(movement.amount).toFixed(2)} en ${movement.methodName}`,
+            : `${who} — $${Number(movement.amount).toFixed(2)} en ${(movement.paymentDetails || []).map((payment) => `${payment.methodName} $${Number(payment.amount).toFixed(2)}`).join(" · ") || movement.methodName}`,
           date: movement.createdAt,
           icon: isCharge ? "BookUp" : "Wallet",
           color: isCharge ? "text-orange-500" : "text-green-600",

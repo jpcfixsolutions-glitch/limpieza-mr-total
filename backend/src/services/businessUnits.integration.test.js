@@ -38,8 +38,10 @@ before(async () => {
     "CREATE TABLE promotions (id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, price REAL NOT NULL, is_available INTEGER NOT NULL, created_at TEXT)",
     "CREATE TABLE promotion_items (id INTEGER PRIMARY KEY, promotion_id INTEGER NOT NULL, product_id INTEGER NOT NULL, quantity INTEGER NOT NULL, UNIQUE(promotion_id, product_id))",
     "CREATE TABLE customers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, last_name TEXT NOT NULL, document TEXT NOT NULL, phone TEXT, is_active INTEGER NOT NULL, created_at TEXT, business_unit_id INTEGER, internal_code TEXT, is_internal INTEGER NOT NULL DEFAULT 0, UNIQUE(business_unit_id, document))",
-    "CREATE TABLE account_movements (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_id INTEGER NOT NULL, type TEXT NOT NULL, amount REAL NOT NULL, transaction_id INTEGER, method_name TEXT, detail TEXT, register_id INTEGER, user_id INTEGER, created_at TEXT, business_unit_id INTEGER, source_type TEXT, source_id TEXT, reversal_of_movement_id INTEGER)",
+    "CREATE TABLE account_movements (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_id INTEGER NOT NULL, type TEXT NOT NULL, amount REAL NOT NULL, transaction_id INTEGER, method_name TEXT, detail TEXT, register_id INTEGER, user_id INTEGER, created_at TEXT, business_unit_id INTEGER, source_type TEXT, source_id TEXT, reversal_of_movement_id INTEGER, idempotency_key TEXT)",
+    "CREATE TABLE account_payment_details (id INTEGER PRIMARY KEY AUTOINCREMENT, account_movement_id INTEGER NOT NULL, payment_method_id INTEGER, method_name TEXT NOT NULL, amount REAL NOT NULL)",
     "CREATE UNIQUE INDEX account_movements_source_unique ON account_movements(business_unit_id, source_type, source_id, type) WHERE source_type IS NOT NULL",
+    "CREATE UNIQUE INDEX account_movements_payment_idempotency_unique ON account_movements(business_unit_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
     "CREATE TABLE warehouse_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, business_unit_id INTEGER NOT NULL, customer_id INTEGER, status TEXT NOT NULL, total REAL NOT NULL, observations TEXT, charge_to_account INTEGER NOT NULL, user_id INTEGER, idempotency_key TEXT, confirmed_at TEXT, dispatched_at TEXT, cancelled_at TEXT, created_at TEXT, updated_at TEXT, UNIQUE(business_unit_id, idempotency_key))",
     "CREATE TABLE warehouse_order_items (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL, product_id INTEGER, product_name TEXT NOT NULL, quantity INTEGER NOT NULL, unit_price REAL NOT NULL, unit_cost REAL NOT NULL, total REAL NOT NULL)",
     "CREATE TABLE warehouse_purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, business_unit_id INTEGER NOT NULL, supplier TEXT NOT NULL, status TEXT NOT NULL, total REAL NOT NULL, observations TEXT, user_id INTEGER, idempotency_key TEXT, received_at TEXT, cancelled_at TEXT, created_at TEXT, updated_at TEXT, UNIQUE(business_unit_id, idempotency_key))",
@@ -61,7 +63,7 @@ before(async () => {
     "INSERT INTO business_unit_products (business_unit_id, product_id, stock, min_stock, cost, sale_price, wholesale_price, is_available, fulfillment_mode) VALUES (1,1,10,1,10,20,17,1,'OWN_STOCK'), (2,1,20,1,8,18,0,1,'OWN_STOCK'), (1,2,5,1,5,15,13,1,'WAREHOUSE_DIRECT'), (2,2,8,1,4,12,0,1,'OWN_STOCK')",
     "INSERT INTO cash_registers VALUES (1,1,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL)",
     "INSERT INTO customers (id,name,last_name,document,is_active,business_unit_id,is_internal) VALUES (1,'Cliente','Local','DUP',1,1,0),(2,'Cliente','Mayorista','DUP',1,2,0),(3,'Local','Mr.Total','INTERNAL-LOCAL',1,2,1)",
-    "INSERT INTO payment_methods VALUES (1, 'Efectivo', 0)",
+    "INSERT INTO payment_methods VALUES (1, 'Efectivo', 0), (2, 'Transferencia', 0), (3, 'Tarjeta de débito', 0)",
     "INSERT INTO promotions VALUES (1, 'Promo mixta', NULL, 35, 1, NULL), (2, '3 productos por $50', NULL, 50, 1, NULL)",
     "INSERT INTO promotion_items VALUES (1,1,1,1),(2,1,2,1),(3,2,1,3)",
   ], "write");
@@ -100,6 +102,44 @@ test("flujos multiunidad, idempotencia, reversiones y concurrencia", async (t) =
     assert.deepEqual(localCustomers.map((c) => c.id), [1]);
     assert.deepEqual(new Set(warehouseCustomers.map((c) => c.id)), new Set([2, 3]));
     assert.equal(warehouseCustomers.find((c) => c.id === 3).isInternal, true);
+  });
+
+  await t.test("los pagos combinados conservan el detalle por método e impactan la caja", async () => {
+    await client.execute({ sql: "INSERT INTO account_movements (customer_id, type, amount, business_unit_id) VALUES (1, 'cargo', 100, 1)" });
+    const combined = await CustomerService.registerPayment(1, {
+      payments: [{ paymentMethodId: 1, amount: 20 }, { paymentMethodId: 2, amount: 40 }],
+      idempotencyKey: "combined-account-payment",
+    }, 1, local);
+    assert.equal(combined.amount, 60);
+    assert.deepEqual(combined.paymentDetails.map((payment) => [payment.methodName, payment.amount]), [["Efectivo", 20], ["Transferencia", 40]]);
+    assert.equal(combined.debt, 40);
+
+    const duplicate = await CustomerService.registerPayment(1, {
+      payments: [{ paymentMethodId: 1, amount: 20 }, { paymentMethodId: 2, amount: 40 }],
+      idempotencyKey: "combined-account-payment",
+    }, 1, local);
+    assert.equal(duplicate.id, combined.id);
+    assert.equal(duplicate.duplicated, true);
+    await assert.rejects(
+      () => CustomerService.registerPayment(1, { payments: [{ paymentMethodId: 1, amount: 41 }] }, 1, local),
+      (error) => error.status === 400 && /no puede superar/i.test(error.message)
+    );
+
+    const full = await CustomerService.registerPayment(1, {
+      payments: [{ paymentMethodId: 1, amount: 10 }, { paymentMethodId: 2, amount: 15 }, { paymentMethodId: 3, amount: 15 }],
+    }, 1, local);
+    assert.equal(full.debt, 0);
+    const cashPayments = await CustomerService.getPaymentsByRegister(1);
+    assert.deepEqual(cashPayments.reduce((totals, payment) => ({
+      ...totals,
+      [payment.methodName]: (totals[payment.methodName] || 0) + payment.amount,
+    }), {}), { Efectivo: 30, Transferencia: 55, "Tarjeta de débito": 15 });
+    const detail = await CustomerService.getDetail(1, local);
+    assert.equal(detail.movements.find((movement) => movement.id === combined.id).paymentDetails.length, 2);
+    await assert.rejects(
+      () => CustomerService.registerPayment(1, { payments: [{ paymentMethodId: 1, amount: 0 }] }, 1, local),
+      (error) => error.status === 400 && /mayor a cero/i.test(error.message)
+    );
   });
 
   await t.test("el catálogo local expone el precio mayorista separado", async () => {

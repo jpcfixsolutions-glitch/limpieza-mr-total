@@ -6,7 +6,7 @@ import { TransactionModel } from "../models/transaction.model.js";
 import { getArgentinaTime } from "../db/timeUtils.js";
 import { isAccountMethod, round2 } from "../constants.js";
 import { db } from "../db/client.js";
-import { accountMovements, customers } from "../db/schema.js";
+import { accountMovements, accountPaymentDetails, customers } from "../db/schema.js";
 import { and, eq, sql } from "drizzle-orm";
 
 function debtFrom({ charges = 0, payments = 0 }) {
@@ -25,6 +25,30 @@ function parseDetail(raw) {
   } catch {
     return [];
   }
+}
+
+function normalizePaymentEntries({ payments, amount, methodName }, availableMethods) {
+  const rawEntries = Array.isArray(payments) && payments.length > 0
+    ? payments
+    : [{ amount, methodName }];
+  if (!rawEntries.length) throw { status: 400, message: "Indicá al menos un método de pago." };
+
+  return rawEntries.map((entry) => {
+    const value = round2(entry?.amount);
+    if (!Number.isFinite(value) || value <= 0) {
+      throw { status: 400, message: "El importe de cada método debe ser mayor a cero." };
+    }
+    const requestedId = Number(entry?.paymentMethodId ?? entry?.methodId);
+    const requestedName = String(entry?.methodName || "").trim();
+    const matched = Number.isInteger(requestedId) && requestedId > 0
+      ? availableMethods.find((method) => method.id === requestedId)
+      : availableMethods.find((method) => method.name.trim().toLowerCase() === requestedName.toLowerCase());
+    if (!matched) throw { status: 400, message: "Método de pago inválido." };
+    if (isAccountMethod(matched.name)) {
+      throw { status: 400, message: "No se puede saldar una cuenta con cuenta corriente." };
+    }
+    return { paymentMethodId: matched.id, methodName: matched.name, amount: value };
+  });
 }
 
 async function requireCustomer(id, businessUnit = null) {
@@ -120,6 +144,7 @@ export const CustomerService = {
         transactionId: movement.transactionId,
         createdAt: movement.createdAt,
         description: movement.type === "pago" ? movement.detail : null,
+        paymentDetails: movement.paymentDetails || [],
         items: movement.type === "cargo" ? items : [],
         isReversal: movement.type === "reversion_cargo",
       });
@@ -162,25 +187,14 @@ export const CustomerService = {
     });
   },
 
-  async registerPayment(id, { amount, methodName, description }, userId, businessUnit = null) {
+  async registerPayment(id, { payments, amount, methodName, description, idempotencyKey }, userId, businessUnit = null) {
     const customer = await requireCustomer(id, businessUnit);
-
-    const value = round2(amount);
-    if (!value || value <= 0) {
-      throw { status: 400, message: "El monto debe ser mayor a cero." };
-    }
-
-    const method = String(methodName || "").trim();
-    if (!method) throw { status: 400, message: "El método de pago es requerido." };
-    if (isAccountMethod(method)) {
-      throw { status: 400, message: "No se puede saldar una cuenta con cuenta corriente." };
-    }
-
     const availableMethods = await PaymentMethodModel.findAll();
-    const matched = availableMethods.find(
-      (m) => m.name.trim().toLowerCase() === method.toLowerCase()
-    );
-    if (!matched) throw { status: 400, message: "Método de pago inválido." };
+    const normalizedPayments = normalizePaymentEntries({ payments, amount, methodName }, availableMethods);
+    // Los recargos se aplican a ventas; este flujo cancela una deuda ya emitida.
+    // Por compatibilidad, cada importe informado reduce la deuda y es el mismo que ingresa a Caja.
+    const value = round2(normalizedPayments.reduce((sum, payment) => sum + payment.amount, 0));
+    const requestKey = String(idempotencyKey || "").trim() || null;
 
     const openRegister = businessUnit?.code === "WAREHOUSE" ? null : await CashRegisterModel.findOpen();
     if (businessUnit?.code !== "WAREHOUSE" && !openRegister) {
@@ -192,6 +206,20 @@ export const CustomerService = {
 
     const { datetime } = getArgentinaTime();
     return db.transaction(async (tx) => {
+      if (requestKey) {
+        const duplicate = await tx.select().from(accountMovements).where(and(
+          eq(accountMovements.businessUnitId, businessUnit?.id || customer.businessUnitId || null),
+          eq(accountMovements.idempotencyKey, requestKey)
+        )).then((rows) => rows[0]);
+        if (duplicate) {
+          const details = await tx.select().from(accountPaymentDetails).where(eq(accountPaymentDetails.accountMovementId, duplicate.id));
+          const balance = await tx.select({
+            charges: sql`COALESCE(SUM(CASE WHEN ${accountMovements.type} = 'cargo' THEN ${accountMovements.amount} WHEN ${accountMovements.type} = 'reversion_cargo' THEN -${accountMovements.amount} ELSE 0 END), 0)`,
+            payments: sql`COALESCE(SUM(CASE WHEN ${accountMovements.type} = 'pago' THEN ${accountMovements.amount} ELSE 0 END), 0)`,
+          }).from(accountMovements).where(eq(accountMovements.customerId, customer.id)).then((rows) => rows[0]);
+          return { ...duplicate, paymentDetails: details, debt: debtFrom(balance), duplicated: true };
+        }
+      }
       const balance = await tx.select({
         charges: sql`COALESCE(SUM(CASE WHEN ${accountMovements.type} = 'cargo' THEN ${accountMovements.amount} WHEN ${accountMovements.type} = 'reversion_cargo' THEN -${accountMovements.amount} ELSE 0 END), 0)`,
         payments: sql`COALESCE(SUM(CASE WHEN ${accountMovements.type} = 'pago' THEN ${accountMovements.amount} ELSE 0 END), 0)`,
@@ -199,8 +227,20 @@ export const CustomerService = {
       const debt = debtFrom({ charges: Number(balance?.charges || 0), payments: Number(balance?.payments || 0) });
       if (debt <= 0) throw { status: 400, message: "El cliente no tiene deuda pendiente." };
       if (value > debt) throw { status: 400, message: `El pago no puede superar la deuda actual ($${debt.toFixed(2)}).` };
-      const [movement] = await tx.insert(accountMovements).values({ customerId: customer.id, type: "pago", amount: value, transactionId: null, methodName: matched.name, detail: String(description || "").trim() || null, registerId: openRegister?.id || null, userId: userId || null, businessUnitId: businessUnit?.id || customer.businessUnitId || null, createdAt: datetime }).returning();
-      return { ...movement, debt: round2(debt - value) };
+      const [movement] = await tx.insert(accountMovements).values({
+        customerId: customer.id, type: "pago", amount: value, transactionId: null,
+        methodName: normalizedPayments.length === 1 ? normalizedPayments[0].methodName : "Pago combinado",
+        detail: String(description || "").trim() || null, registerId: openRegister?.id || null,
+        userId: userId || null, businessUnitId: businessUnit?.id || customer.businessUnitId || null,
+        createdAt: datetime, idempotencyKey: requestKey,
+      }).returning();
+      const details = await tx.insert(accountPaymentDetails).values(normalizedPayments.map((payment) => ({
+        accountMovementId: movement.id,
+        paymentMethodId: payment.paymentMethodId,
+        methodName: payment.methodName,
+        amount: payment.amount,
+      }))).returning();
+      return { ...movement, paymentDetails: details, debt: round2(debt - value), duplicated: false };
     });
   },
 

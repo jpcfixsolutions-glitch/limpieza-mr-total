@@ -352,6 +352,19 @@ export const accountMovements = sqliteTable("account_movements", {
   sourceType: text("source_type"),
   sourceId: text("source_id"),
   reversalOfMovementId: integer("reversal_of_movement_id"),
+  idempotencyKey: text("idempotency_key"),
+});
+
+export const accountPaymentDetails = sqliteTable("account_payment_details", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  accountMovementId: integer("account_movement_id")
+    .notNull()
+    .references(() => accountMovements.id, { onDelete: "cascade" }),
+  paymentMethodId: integer("payment_method_id").references(() => paymentMethods.id, {
+    onDelete: "set null",
+  }),
+  methodName: text("method_name").notNull(),
+  amount: real("amount").notNull(),
 });
 
 // ─── Operación mayorista del Galpón ─────────────────────────────────────────

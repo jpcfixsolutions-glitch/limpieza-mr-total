@@ -64,10 +64,10 @@ export function AccountTicket({ ticket }) {
 
       {ticket.kind === "payment" && (
         <div className="sale-ticket__totals">
-          <div><span>Método</span><strong>{ticket.methodName || "Sin especificar"}</strong></div>
+          {ticket.paymentDetails?.length > 0 ? ticket.paymentDetails.map((payment, index) => <div key={`${payment.methodName}-${index}`}><span>{payment.methodName}</span><strong>{money(payment.amount)}</strong></div>) : <div><span>Método</span><strong>{ticket.methodName || "Sin especificar"}</strong></div>}
           {ticket.description && <div><span>Detalle</span><strong>{ticket.description}</strong></div>}
           {ticket.previousDebt != null && <div><span>Deuda anterior</span><strong>{money(ticket.previousDebt)}</strong></div>}
-          <div><span>Pago recibido</span><strong>{money(ticket.amount)}</strong></div>
+          <div><span>TOTAL ABONADO</span><strong>{money(ticket.amount)}</strong></div>
           <div className="sale-ticket__grand-total"><span>SALDO PENDIENTE</span><span>{money(ticket.currentDebt)}</span></div>
         </div>
       )}
