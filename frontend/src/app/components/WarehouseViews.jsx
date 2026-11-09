@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { PackageCheck, PackageOpen, RefreshCw, Truck } from "lucide-react";
 import api from "../../services/api.js";
+import { useWarehouseOperations } from "../hooks/useWarehouseOperations.js";
+import { WarehouseProductionCard } from "./WarehouseProductionCard.jsx";
+export { WarehouseOrdersView } from "./WarehouseOrdersView.jsx";
 
 function Page({ title, subtitle, actions, children }) {
   return (
@@ -30,10 +34,74 @@ function StatCards({ stats }) {
   return <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">{values.map(([label, value]) => <div key={label} className={card}><p className="text-sm text-foreground/60 font-bold">{label}</p><p className="text-2xl font-black mt-2">{value}</p></div>)}</div>;
 }
 
-export function WarehouseHomeView() {
-  const [stats, setStats] = useState({});
-  useEffect(() => { api.get("/warehouse/stats").then((r) => setStats(r.data)).catch(() => toast.error("No se pudo cargar el resumen del Galpón.")); }, []);
-  return <Page title="Inicio" subtitle="Resumen operativo, sin mezclar la caja ni las ventas del Local."><StatCards stats={stats} /></Page>;
+const warehouseDateFormat = new Intl.DateTimeFormat("es-AR", {
+  timeZone: "America/Argentina/Cordoba", weekday: "long", day: "numeric", month: "long", year: "numeric",
+});
+const warehouseTimeFormat = new Intl.DateTimeFormat("es-AR", {
+  timeZone: "America/Argentina/Cordoba", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+
+export function WarehouseHomeView({ user }) {
+  // La aplicación usa createRoot (renderizado cliente), sin hidratación SSR.
+  const [now, setNow] = useState(() => new Date());
+  const { data, loading, error, refresh } = useWarehouseOperations();
+  const summary = data?.counts;
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const hour = Number(warehouseTimeFormat.formatToParts(now).find((part) => part.type === "hour").value);
+  const greeting = hour >= 5 && hour < 12 ? "Buenos días" : hour >= 12 && hour < 20 ? "Buenas tardes" : "Buenas noches";
+  const name = user?.name?.trim();
+  const date = warehouseDateFormat.format(now);
+
+  const metrics = [
+    { key: "pending", title: "Pedidos pendientes", icon: PackageOpen, empty: "Sin pedidos pendientes", description: "En preparación o pendientes de producción." },
+    { key: "inDelivery", title: "Pedidos en reparto", icon: Truck, empty: "Sin pedidos en reparto", description: "Listos o en envío, pendientes de entrega." },
+    { key: "soldToday", title: "Pedidos vendidos hoy", icon: PackageCheck, empty: "Sin entregas completadas hoy", description: "Entregados hoy en horario de Argentina." },
+  ];
+
+  return (
+    <Page title={<span className="block text-2xl sm:text-3xl [overflow-wrap:anywhere]">¡{greeting}{name ? `, ${name}` : ""}!</span>}
+      subtitle={<time dateTime={now.toISOString()} className="text-sm sm:text-base">
+        {date.charAt(0).toUpperCase() + date.slice(1)} · {warehouseTimeFormat.format(now)} hs
+      </time>} actions={
+      <button type="button" onClick={refresh} disabled={loading}
+        className="flex items-center gap-2 text-sm font-bold rounded-xl border border-foreground/15 bg-surface px-4 py-2 hover:bg-background disabled:opacity-50">
+        <RefreshCw size={16} aria-hidden="true" className={loading ? "animate-spin motion-reduce:animate-none" : ""} />
+        {loading ? "Actualizando…" : "Actualizar"}
+      </button>
+    }>
+      {error && <div role="alert" className="mb-4 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm text-primary">
+        {error} Volvé a intentar con Actualizar.
+      </div>}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" aria-live="polite" aria-busy={loading}>
+        {metrics.map(({ key, title, icon: Icon, empty, description }) => (
+          <section key={key} aria-labelledby={`warehouse-${key}`} className={`${card} min-w-0 flex flex-col`}>
+            <div className="flex items-start justify-between gap-3">
+              <h2 id={`warehouse-${key}`} className="text-sm font-bold text-foreground/70 pt-2">{title}</h2>
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <Icon size={22} aria-hidden="true" />
+              </span>
+            </div>
+            {loading && !data ? <div className="mt-4">
+              <span className="block h-10 w-20 rounded-lg bg-foreground/10 animate-pulse motion-reduce:animate-none" aria-hidden="true" />
+              <p className="mt-2 text-sm text-foreground/60">Cargando pedidos…</p>
+            </div> : error ? <>
+              <p className="mt-4 text-4xl font-black" aria-label="Sin datos">—</p>
+              <p className="mt-2 text-sm text-foreground/60">No se pudo obtener el contador.</p>
+            </> : <>
+              <p className="mt-4 text-4xl font-black tabular-nums break-all">{summary[key].toLocaleString("es-AR")}</p>
+              <p className="mt-2 text-sm text-foreground/60">{summary[key] === 0 ? empty : description}</p>
+            </>}
+          </section>
+        ))}
+      </div>
+      <WarehouseProductionCard production={data?.production} loading={loading} error={error} />
+    </Page>
+  );
 }
 
 function StatusButton({ onClick, children }) {
@@ -76,25 +144,6 @@ function LineItemsEditor({ kind, products, items, onChange }) {
   );
 }
 
-export function WarehouseOrdersView() {
-  const [orders, setOrders] = useState([]); const [products, setProducts] = useState([]); const [customers, setCustomers] = useState([]);
-  const [form, setForm] = useState({ customerId: "", observations: "", chargeToAccount: false, items: [newLine("order")] });
-  const load = useCallback(() => Promise.all([api.get("/warehouse/orders"), api.get("/products"), api.get("/customers")]).then(([o, p, c]) => { setOrders(o.data); setProducts(p.data); setCustomers(c.data); }), []);
-  useEffect(() => { load().catch(() => toast.error("No se pudieron cargar los pedidos.")); }, [load]);
-  const create = async (event) => { event.preventDefault(); try { await api.post("/warehouse/orders", { customerId: Number(form.customerId) || null, observations: form.observations, chargeToAccount: form.chargeToAccount, idempotencyKey: crypto.randomUUID(), items: form.items.map((item) => ({ productId: Number(item.productId), quantity: Number(item.quantity), unitPrice: Number(item.unitPrice) })) }); toast.success("Pedido guardado como borrador."); setForm({ customerId: "", observations: "", chargeToAccount: false, items: [newLine("order")] }); await load(); } catch (e) { toast.error(e.response?.data?.message || "No se pudo guardar el pedido."); } };
-  const status = async (id, next) => { try { await api.patch(`/warehouse/orders/${id}/status`, { status: next }); await load(); } catch (e) { toast.error(e.response?.data?.message || "No se pudo cambiar el estado."); } };
-  return <Page title="Pedidos" subtitle="El borrador no reserva stock; el descuento ocurre una sola vez al despachar.">
-    <form onSubmit={create} className={`${card} grid md:grid-cols-2 gap-3 mb-6`}>
-      <select required className={input} value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })}><option value="">Cliente</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.name} {c.lastName}{c.isInternal ? " · Interno" : ""}</option>)}</select>
-      <input className={input} value={form.observations} onChange={(e) => setForm({ ...form, observations: e.target.value })} placeholder="Observaciones" />
-      <LineItemsEditor kind="order" products={products} items={form.items} onChange={(items) => setForm({ ...form, items })} />
-      <label className="text-sm flex items-center gap-2"><input type="checkbox" checked={form.chargeToAccount} onChange={(e) => setForm({ ...form, chargeToAccount: e.target.checked })} /> Cargar a cuenta al despachar</label>
-      <button className={`${button} md:justify-self-end`}>Crear borrador con {form.items.length} ítem{form.items.length === 1 ? "" : "s"}</button>
-    </form>
-    <div className="space-y-3">{orders.map((order) => <div key={order.id} className={`${card} flex flex-wrap justify-between gap-4`}><div><p className="font-black">Pedido #{order.id} · {order.customerName} {order.customerLastName}</p><p className="text-sm text-foreground/60 mt-1"><ItemsSummary items={order.items} /> · {money(order.total)}</p><span className="inline-block mt-2 text-xs uppercase font-black bg-secondary/20 px-2 py-1 rounded">{order.status}</span></div><div className="flex flex-wrap items-center gap-2">{order.status === "draft" && <StatusButton onClick={() => status(order.id, "confirmed")}>Confirmar</StatusButton>}{order.status === "confirmed" && <StatusButton onClick={() => status(order.id, "preparing")}>Preparar</StatusButton>}{["confirmed", "preparing"].includes(order.status) && <StatusButton onClick={() => status(order.id, "dispatched")}>Despachar</StatusButton>}{order.status !== "cancelled" && <StatusButton onClick={() => status(order.id, "cancelled")}>Cancelar</StatusButton>}</div></div>)}</div>
-  </Page>;
-}
-
 export function WarehouseStockView() {
   const [products, setProducts] = useState([]);
   const load = useCallback(() => api.get("/products").then((r) => setProducts(r.data)), []);
@@ -120,7 +169,7 @@ export function WarehouseCustomersView() {
   useEffect(() => { load().catch(() => toast.error("No se pudieron cargar los clientes.")); }, [load]);
   const create = async (e) => { e.preventDefault(); try { await api.post("/customers", form); setForm({ name: "", document: "", phone: "" }); await load(); } catch (err) { toast.error(err.response?.data?.message || "No se pudo crear el cliente."); } };
   const pay = async (customer) => { const value = window.prompt(`Cobro para ${customer.name}. Deuda actual: ${money(customer.debt)}`, customer.debt); if (!value) return; try { await api.post(`/customers/${customer.id}/payments`, { amount: Number(value), methodName: "Efectivo", description: "Cobro Galpón" }); await load(); } catch (e) { toast.error(e.response?.data?.message || "No se pudo registrar el cobro."); } };
-  return <Page title="Clientes y cuentas corrientes" subtitle="Cartera mayorista separada; el Local figura con vínculo interno estable."><form onSubmit={create} className={`${card} grid md:grid-cols-4 gap-3 mb-6`}><input required className={input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Nombre" /><input required className={input} value={form.document} onChange={(e) => setForm({ ...form, document: e.target.value })} placeholder="Documento" /><input className={input} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="Teléfono" /><button className={button}>Agregar cliente</button></form><div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">{customers.map((c) => <div key={c.id} className={card}><p className="font-black">{c.name} {c.lastName} {c.isInternal && <span className="text-xs text-primary">INTERNO</span>}</p><p className="text-sm text-foreground/60">{c.document}</p><p className="text-xl font-black mt-4">Deuda: {money(c.debt)}</p>{c.debt > 0 && <button onClick={() => pay(c)} className={`${button} mt-3`}>Registrar cobro</button>}</div>)}</div></Page>;
+  return <Page title="Clientes y cuentas corrientes" subtitle="Cartera mayorista separada; el Local figura con vínculo interno estable."><form onSubmit={create} className={`${card} grid md:grid-cols-4 gap-3 mb-6`}><input required className={input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Nombre" /><input required className={input} value={form.document} onChange={(e) => setForm({ ...form, document: e.target.value })} placeholder="Documento" /><input className={input} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="Teléfono" /><button className={button}>Agregar cliente</button></form><div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">{customers.map((c) => <div key={c.id} className={card}><p className="font-black">{c.name} {c.lastName} {c.isInternal && <span className="text-xs text-primary">INTERNO</span>}</p><p className="text-sm text-foreground/60">{c.document?.startsWith("WH-CONTACT-") ? c.phone : c.document}</p><p className="text-xl font-black mt-4">Deuda: {money(c.debt)}</p>{c.debt > 0 && <button onClick={() => pay(c)} className={`${button} mt-3`}>Registrar cobro</button>}</div>)}</div></Page>;
 }
 
 export function WarehouseMovementsView() {

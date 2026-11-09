@@ -42,8 +42,9 @@ before(async () => {
     "CREATE TABLE account_payment_details (id INTEGER PRIMARY KEY AUTOINCREMENT, account_movement_id INTEGER NOT NULL, payment_method_id INTEGER, method_name TEXT NOT NULL, amount REAL NOT NULL)",
     "CREATE UNIQUE INDEX account_movements_source_unique ON account_movements(business_unit_id, source_type, source_id, type) WHERE source_type IS NOT NULL",
     "CREATE UNIQUE INDEX account_movements_payment_idempotency_unique ON account_movements(business_unit_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
-    "CREATE TABLE warehouse_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, business_unit_id INTEGER NOT NULL, customer_id INTEGER, status TEXT NOT NULL, total REAL NOT NULL, observations TEXT, charge_to_account INTEGER NOT NULL, user_id INTEGER, idempotency_key TEXT, confirmed_at TEXT, dispatched_at TEXT, cancelled_at TEXT, created_at TEXT, updated_at TEXT, UNIQUE(business_unit_id, idempotency_key))",
-    "CREATE TABLE warehouse_order_items (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL, product_id INTEGER, product_name TEXT NOT NULL, quantity INTEGER NOT NULL, unit_price REAL NOT NULL, unit_cost REAL NOT NULL, total REAL NOT NULL)",
+    "CREATE TABLE warehouse_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, business_unit_id INTEGER NOT NULL, customer_id INTEGER, status TEXT NOT NULL CHECK(status IN ('draft','confirmed','preparing','dispatched','cancelled')), total REAL NOT NULL, observations TEXT, charge_to_account INTEGER NOT NULL, user_id INTEGER, idempotency_key TEXT, confirmed_at TEXT, dispatched_at TEXT, delivered_at TEXT, ready_at TEXT, version INTEGER NOT NULL DEFAULT 0, cancelled_at TEXT, created_at TEXT, updated_at TEXT, UNIQUE(business_unit_id, idempotency_key))",
+    "CREATE TABLE warehouse_customer_details (customer_id INTEGER PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE, business_unit_id INTEGER NOT NULL, address TEXT NOT NULL, contact_key TEXT NOT NULL, UNIQUE(business_unit_id, contact_key))",
+    "CREATE TABLE warehouse_order_items (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL, product_id INTEGER, product_name TEXT NOT NULL, quantity INTEGER NOT NULL, preparation_status TEXT NOT NULL DEFAULT 'preparing', unit_price REAL NOT NULL, unit_cost REAL NOT NULL, total REAL NOT NULL)",
     "CREATE TABLE warehouse_purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, business_unit_id INTEGER NOT NULL, supplier TEXT NOT NULL, status TEXT NOT NULL, total REAL NOT NULL, observations TEXT, user_id INTEGER, idempotency_key TEXT, received_at TEXT, cancelled_at TEXT, created_at TEXT, updated_at TEXT, UNIQUE(business_unit_id, idempotency_key))",
     "CREATE TABLE warehouse_purchase_items (id INTEGER PRIMARY KEY AUTOINCREMENT, purchase_id INTEGER NOT NULL, product_id INTEGER NOT NULL, product_name TEXT NOT NULL, quantity INTEGER NOT NULL, unit_cost REAL NOT NULL, total REAL NOT NULL)",
     "CREATE TABLE payment_methods (id INTEGER PRIMARY KEY, name TEXT NOT NULL, surcharge REAL NOT NULL)",
@@ -160,6 +161,8 @@ test("flujos multiunidad, idempotencia, reversiones y concurrencia", async (t) =
   await t.test("despachar un pedido descuenta una vez y cancelarlo crea una sola reversión", async () => {
     const order = await WarehouseService.createOrder({ customerId: 2, idempotencyKey: "order-1", items: [{ productId: 1, quantity: 3, unitPrice: 18 }] }, 1, warehouse);
     await WarehouseService.changeOrderStatus(order.id, "confirmed", 1, warehouse);
+    for (const item of order.items) await WarehouseService.changeItemStatus(order.id, item.id, "ready", warehouse);
+    await WarehouseService.changeOrderStatus(order.id, "ready", 1, warehouse);
     await WarehouseService.changeOrderStatus(order.id, "dispatched", 1, warehouse);
     await WarehouseService.changeOrderStatus(order.id, "dispatched", 1, warehouse);
     assert.equal(await stock(2, 1), 17);

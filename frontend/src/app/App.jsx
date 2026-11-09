@@ -220,7 +220,7 @@ export default function App() {
           onBusinessUnitChange={handleBusinessUnitChange}
         />
 
-        {businessUnit === "WAREHOUSE" && activeView === "warehouse-home" && <WarehouseHomeView />}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-home" && <WarehouseHomeView user={user} />}
         {businessUnit === "WAREHOUSE" && activeView === "warehouse-orders" && <WarehouseOrdersView />}
         {businessUnit === "WAREHOUSE" && activeView === "warehouse-stock" && <WarehouseStockView />}
         {businessUnit === "WAREHOUSE" && activeView === "warehouse-purchases" && <WarehousePurchasesView />}

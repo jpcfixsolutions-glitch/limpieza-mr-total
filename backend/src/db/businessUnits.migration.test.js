@@ -24,6 +24,10 @@ before(async () => {
     "CREATE TABLE account_movements (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL, type TEXT NOT NULL, amount REAL NOT NULL, transaction_id INTEGER, method_name TEXT, detail TEXT, register_id INTEGER, user_id INTEGER, created_at TEXT)",
     "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     "CREATE TABLE app_migrations (id TEXT PRIMARY KEY, applied_at TEXT)",
+    "CREATE TABLE warehouse_orders (id INTEGER PRIMARY KEY, business_unit_id INTEGER, customer_id INTEGER, status TEXT NOT NULL, total REAL, observations TEXT, charge_to_account INTEGER, user_id INTEGER, idempotency_key TEXT, confirmed_at TEXT, dispatched_at TEXT, cancelled_at TEXT, created_at TEXT, updated_at TEXT)",
+    "CREATE TABLE warehouse_order_items (id INTEGER PRIMARY KEY, order_id INTEGER, product_id INTEGER, product_name TEXT, quantity INTEGER, unit_price REAL, unit_cost REAL, total REAL)",
+    "INSERT INTO warehouse_orders (id, business_unit_id, status, dispatched_at, created_at) VALUES (41, 2, 'dispatched', '2026-10-01 10:00:00', '2026-10-01 09:00:00'), (42, 2, 'confirmed', NULL, '2026-10-02 09:00:00')",
+    "INSERT INTO warehouse_order_items VALUES (51, 41, 7, 'Producto histórico', 3, 250, 125.5, 750), (52, 42, 7, 'Producto histórico', 2, 250, 125.5, 500)",
     "INSERT INTO products VALUES (7, 'Producto histórico', NULL, NULL, NULL, NULL, 125.5, 250, 1, NULL, 0, NULL, 23, 4, 'Package', 1, '2026-01-01')",
     "INSERT INTO transactions VALUES (3, 1, 500, 'completed', 0, 0, '01/01/2026', '10:00', '2026-01-01 10:00:00')",
     "INSERT INTO customers VALUES (5, 'Ana', 'Pérez', '123', NULL, 1, '2026-01-01')",
@@ -58,4 +62,13 @@ test("la migración conserva los datos históricos y los asigna al Local de form
   assert.deepEqual(Array.from(internalCustomer.rows[0]), ["LOCAL_INTERNAL", 1]);
   assert.equal(Number(migrations.rows[0].total), 1);
   assert.equal(Number(accountPaymentSchema.rows[0].total), 1);
+  const deliveryColumns = await client.execute("PRAGMA table_info(warehouse_orders)");
+  assert.ok(deliveryColumns.rows.some((column) => column.name === "delivered_at"));
+  const deliveryContacts = await client.execute("PRAGMA table_info(warehouse_customer_details)");
+  assert.ok(deliveryContacts.rows.some((column) => column.name === "address"));
+  assert.equal((await client.execute("SELECT count(*) AS n FROM customers WHERE id = 5 AND name = 'Ana' AND document = '123'")).rows[0].n, 1);
+  const oldOrders = await client.execute("SELECT status, ready_at, delivered_at, version FROM warehouse_orders ORDER BY id");
+  assert.deepEqual(oldOrders.rows.map((row) => Array.from(row)), [["dispatched", null, null, 0], ["confirmed", null, null, 0]]);
+  const oldItems = await client.execute("SELECT preparation_status, quantity FROM warehouse_order_items ORDER BY id");
+  assert.deepEqual(oldItems.rows.map((row) => Array.from(row)), [["ready", 3], ["preparing", 2]]);
 });

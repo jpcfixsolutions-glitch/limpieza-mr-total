@@ -1,20 +1,52 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import { db } from "../db/client.js";
 import {
   accountMovements, businessUnitProducts, customers, inventoryMovements, products,
-  warehouseOrderItems, warehouseOrders, warehousePurchaseItems, warehousePurchases,
+  warehouseOrderItems, warehouseOrders, warehousePurchaseItems, warehousePurchases, warehouseCustomerDetails,
 } from "../db/schema.js";
 import { getArgentinaTime } from "../db/timeUtils.js";
 import { adjustInventoryInTransaction, ensureInventoryBalance } from "./inventory.service.js";
+import { calculateWarehouseProduction } from "./warehouseProduction.js";
+
+// El driver SQLite local no admite transacciones de escritura superpuestas en
+// la misma conexión. Encolar Galpón evita bloqueos del driver; la versión y el
+// UPDATE condicional siguen protegiendo cambios entre sesiones/procesos.
+let warehouseQueue = Promise.resolve();
+function runWarehouseTransaction(operation) {
+  const result = warehouseQueue.then(() => db.transaction(operation));
+  warehouseQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
 
 function positiveInteger(value, label = "La cantidad") {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) throw { status: 400, message: `${label} debe ser un entero mayor a cero.` };
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw { status: 400, message: `${label} debe ser un entero mayor a cero.` };
   return parsed;
 }
 
 function assertWarehouse(unit) {
   if (unit?.code !== "WAREHOUSE") throw { status: 403, message: "Esta operación pertenece exclusivamente al Galpón." };
+}
+
+function operationalStatus(order) {
+  if (order.status === "dispatched") return order.deliveredAt ? "delivered" : "dispatched";
+  if (["confirmed", "preparing"].includes(order.status) && order.readyAt) return "ready";
+  return order.status;
+}
+
+function checkVersion(order, expectedVersion) {
+  if (expectedVersion !== undefined && (!Number.isSafeInteger(expectedVersion) || expectedVersion !== order.version)) {
+    throw { status: 409, message: "El pedido cambió en otra sesión. Actualizá y revisá su estado antes de reintentar." };
+  }
+}
+
+function warehouseDatetime() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("es-AR", {
+    timeZone: "America/Argentina/Cordoba", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 async function hydrateOrders(rows, executor = db) {
@@ -23,7 +55,12 @@ async function hydrateOrders(rows, executor = db) {
     .where(inArray(warehouseOrderItems.orderId, rows.map((row) => row.id)));
   const byOrder = new Map();
   for (const item of items) (byOrder.get(item.orderId) || (byOrder.set(item.orderId, []), byOrder.get(item.orderId))).push(item);
-  return rows.map((row) => ({ ...row, items: byOrder.get(row.id) || [] }));
+  return rows.map((row) => {
+    const status = operationalStatus(row);
+    return { ...row, status, items: (byOrder.get(row.id) || []).map((item) => ({
+      ...item, status: ["dispatched", "delivered"].includes(status) ? status : item.preparationStatus,
+    })) };
+  });
 }
 
 async function hydratePurchases(rows, executor = db) {
@@ -37,6 +74,7 @@ async function hydratePurchases(rows, executor = db) {
 
 async function snapshotItems(tx, unitId, rawItems, kind) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) throw { status: 400, message: "Agregá al menos un producto." };
+  if (rawItems.some((item) => !item || typeof item !== "object" || Array.isArray(item))) throw { status: 400, message: "Los productos del pedido no son válidos." };
   const normalized = rawItems.map((item) => ({
     productId: positiveInteger(item.productId, "El producto"),
     quantity: positiveInteger(item.quantity),
@@ -55,29 +93,108 @@ async function snapshotItems(tx, unitId, rawItems, kind) {
     const inventory = row.inventory;
     if (kind === "order" && (!inventory || !inventory.isAvailable)) throw { status: 400, message: `"${row.product.name}" no está disponible en el Galpón.` };
     const unitPrice = kind === "order" ? item.value : 0;
-    const unitCost = kind === "purchase" ? item.value : Number(inventory?.cost || row.product.cost || 0);
+    const unitCost = kind === "purchase" ? item.value : Number(inventory?.cost ?? 0);
     return { productId: item.productId, productName: row.product.name, quantity: item.quantity, unitPrice, unitCost, total: item.quantity * (kind === "order" ? unitPrice : unitCost) };
   });
 }
 
 export const WarehouseService = {
-  async listOrders(unit) {
+  async operations(unit, previewItems = null) {
     assertWarehouse(unit);
-    const rows = await db.select({
+    return runWarehouseTransaction(async (tx) => {
+      const orders = await this.listOrders(unit, tx);
+      const inventory = await tx.select({
+        id: products.id, name: products.name, codbarra: products.codbarra,
+        stock: businessUnitProducts.stock, price: businessUnitProducts.salePrice, isAvailable: businessUnitProducts.isAvailable,
+      }).from(businessUnitProducts).innerJoin(products, eq(products.id, businessUnitProducts.productId))
+        .where(eq(businessUnitProducts.businessUnitId, unit.id));
+      const customerList = await tx.select({
+        id: customers.id, name: customers.name, lastName: customers.lastName, phone: customers.phone,
+        address: warehouseCustomerDetails.address,
+      }).from(customers).leftJoin(warehouseCustomerDetails, and(
+        eq(warehouseCustomerDetails.customerId, customers.id), eq(warehouseCustomerDetails.businessUnitId, unit.id),
+      )).where(and(eq(customers.businessUnitId, unit.id), eq(customers.isActive, true)));
+      const { allocations, ...production } = calculateWarehouseProduction(orders, inventory);
+      let preview;
+      if (previewItems) {
+        const items = await snapshotItems(tx, unit.id, previewItems, "order");
+        const projected = calculateWarehouseProduction([...orders, {
+          id: Number.MAX_SAFE_INTEGER, status: "confirmed", createdAt: getArgentinaTime().datetime, items,
+        }], inventory);
+        preview = { items: projected.allocations[Number.MAX_SAFE_INTEGER], production: { items: projected.items, totalUnits: projected.totalUnits } };
+      }
+      const today = warehouseDatetime().slice(0, 10);
+      return {
+        orders: orders.map((order) => ({ ...order, items: allocations[order.id] || order.items })),
+        products: inventory, customers: customerList, production, ...(preview ? { preview } : {}),
+        counts: {
+          pending: orders.filter((order) => ["confirmed", "preparing"].includes(order.status)).length,
+          inDelivery: orders.filter((order) => ["ready", "dispatched"].includes(order.status)).length,
+          soldToday: orders.filter((order) => order.status === "delivered" && order.deliveredAt?.slice(0, 10) === today).length,
+        },
+      };
+    });
+  },
+
+  async createCustomer({ name, phone, address }, unit) {
+    assertWarehouse(unit);
+    const cleanName = String(name || "").trim();
+    const cleanPhone = String(phone || "").trim();
+    const cleanAddress = String(address || "").trim();
+    const digits = cleanPhone.replace(/\D/g, "");
+    if (!cleanName || cleanName.length > 160) throw { status: 400, message: "Ingresá un nombre de hasta 160 caracteres." };
+    if (!/^[+\d\s().-]+$/.test(cleanPhone) || digits.length < 6 || digits.length > 20) throw { status: 400, message: "Ingresá un teléfono válido, con prefijo si corresponde." };
+    if (!cleanAddress || cleanAddress.length > 300) throw { status: 400, message: "Ingresá una dirección de hasta 300 caracteres." };
+    const normalize = (value) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+    const contactKey = `${normalize(cleanName)}|${digits}`;
+    return runWarehouseTransaction(async (tx) => {
+      const previous = await tx.select().from(warehouseCustomerDetails).where(and(
+        eq(warehouseCustomerDetails.businessUnitId, unit.id), eq(warehouseCustomerDetails.contactKey, contactKey),
+      )).then((rows) => rows[0]);
+      let customer = previous && await tx.select().from(customers).where(and(eq(customers.id, previous.customerId), eq(customers.businessUnitId, unit.id))).then((rows) => rows[0]);
+      if (customer) {
+        if (!customer.isActive) throw { status: 409, message: "Este cliente está inactivo. Revisalo en Clientes y cuentas." };
+        return { id: customer.id, name: customer.name, lastName: customer.lastName, phone: customer.phone, address: previous.address, duplicated: true };
+      }
+      // Reutilizar también contactos históricos creados desde Clientes.
+      const existing = await tx.select().from(customers).where(and(eq(customers.businessUnitId, unit.id), eq(customers.isActive, true)));
+      customer = existing.find((row) => normalize(`${row.name} ${row.lastName}`) === normalize(cleanName) && String(row.phone || "").replace(/\D/g, "") === digits);
+      const reused = Boolean(customer);
+      if (!customer) [customer] = await tx.insert(customers).values({
+        name: cleanName, lastName: "", phone: cleanPhone,
+        // Referencia interna, no documento personal: el modelo histórico exige
+        // un document único, aunque este formulario sólo requiere contacto.
+        document: `WH-CONTACT-${randomUUID()}`, businessUnitId: unit.id, isActive: true, createdAt: getArgentinaTime().datetime,
+      }).returning();
+      const detail = await tx.select().from(warehouseCustomerDetails).where(eq(warehouseCustomerDetails.customerId, customer.id)).then((rows) => rows[0]);
+      if (!detail) await tx.insert(warehouseCustomerDetails).values({ customerId: customer.id, businessUnitId: unit.id, contactKey, address: cleanAddress }).returning();
+      return { id: customer.id, name: customer.name, lastName: customer.lastName, phone: customer.phone, address: detail?.address || cleanAddress, duplicated: reused };
+    });
+  },
+
+  async listOrders(unit, executor = db) {
+    assertWarehouse(unit);
+    const rows = await executor.select({
       id: warehouseOrders.id, businessUnitId: warehouseOrders.businessUnitId, customerId: warehouseOrders.customerId,
       customerName: customers.name, customerLastName: customers.lastName, status: warehouseOrders.status,
+      customerPhone: customers.phone, customerAddress: warehouseCustomerDetails.address, deliveredAt: warehouseOrders.deliveredAt,
+      readyAt: warehouseOrders.readyAt, version: warehouseOrders.version,
       total: warehouseOrders.total, observations: warehouseOrders.observations, chargeToAccount: warehouseOrders.chargeToAccount,
       userId: warehouseOrders.userId, confirmedAt: warehouseOrders.confirmedAt, dispatchedAt: warehouseOrders.dispatchedAt,
       cancelledAt: warehouseOrders.cancelledAt, createdAt: warehouseOrders.createdAt, updatedAt: warehouseOrders.updatedAt,
-    }).from(warehouseOrders).leftJoin(customers, eq(warehouseOrders.customerId, customers.id))
+    }).from(warehouseOrders).leftJoin(customers, and(eq(warehouseOrders.customerId, customers.id), eq(customers.businessUnitId, unit.id)))
+      .leftJoin(warehouseCustomerDetails, and(eq(warehouseCustomerDetails.customerId, customers.id), eq(warehouseCustomerDetails.businessUnitId, unit.id)))
       .where(eq(warehouseOrders.businessUnitId, unit.id)).orderBy(desc(warehouseOrders.createdAt), desc(warehouseOrders.id));
-    return hydrateOrders(rows);
+    return hydrateOrders(rows, executor);
   },
 
-  async createOrder({ customerId, items, observations, chargeToAccount, idempotencyKey }, userId, unit) {
+  async createOrder({ customerId, items, observations, chargeToAccount, idempotencyKey, status = "draft" }, userId, unit) {
     assertWarehouse(unit);
+    if (!["draft", "confirmed"].includes(status)) throw { status: 400, message: "Estado inicial inválido." };
+    if (status === "confirmed" && !customerId) throw { status: 400, message: "Seleccioná un cliente para registrar el pedido." };
+    if (customerId) positiveInteger(customerId, "El cliente");
     const key = String(idempotencyKey || "").trim() || null;
-    return db.transaction(async (tx) => {
+    return runWarehouseTransaction(async (tx) => {
       if (key) {
         const duplicate = await tx.select().from(warehouseOrders).where(and(eq(warehouseOrders.businessUnitId, unit.id), eq(warehouseOrders.idempotencyKey, key))).then((rows) => rows[0]);
         if (duplicate) return { ...(await hydrateOrders([duplicate], tx))[0], duplicated: true };
@@ -90,21 +207,22 @@ export const WarehouseService = {
       const total = snapshots.reduce((sum, item) => sum + item.total, 0);
       const { datetime } = getArgentinaTime();
       const [order] = await tx.insert(warehouseOrders).values({
-        businessUnitId: unit.id, customerId: customerId ? Number(customerId) : null, status: "draft", total,
+        businessUnitId: unit.id, customerId: customerId ? Number(customerId) : null, status, total,
         observations: String(observations || "").trim() || null, chargeToAccount: Boolean(chargeToAccount), userId,
-        idempotencyKey: key, createdAt: datetime, updatedAt: datetime,
+        idempotencyKey: key, confirmedAt: status === "confirmed" ? datetime : null, createdAt: datetime, updatedAt: datetime,
       }).returning();
-      const createdItems = await tx.insert(warehouseOrderItems).values(snapshots.map((item) => ({ ...item, orderId: order.id }))).returning();
-      return { ...order, items: createdItems, duplicated: false };
+      await tx.insert(warehouseOrderItems).values(snapshots.map((item) => ({ ...item, orderId: order.id }))).returning();
+      return { ...(await hydrateOrders([order], tx))[0], duplicated: false };
     });
   },
 
-  async updateDraftOrder(id, { customerId, items, observations, chargeToAccount }, unit) {
+  async updateDraftOrder(id, { customerId, items, observations, chargeToAccount, expectedVersion }, unit) {
     assertWarehouse(unit);
-    return db.transaction(async (tx) => {
+    return runWarehouseTransaction(async (tx) => {
       const order = await tx.select().from(warehouseOrders).where(and(eq(warehouseOrders.id, Number(id)), eq(warehouseOrders.businessUnitId, unit.id))).then((rows) => rows[0]);
       if (!order) throw { status: 404, message: "Pedido no encontrado." };
       if (order.status !== "draft") throw { status: 409, message: "Sólo se puede editar un pedido en borrador." };
+      checkVersion(order, expectedVersion);
       const nextCustomerId = customerId === undefined ? order.customerId : (customerId ? Number(customerId) : null);
       if (nextCustomerId) {
         const customer = await tx.select().from(customers).where(and(eq(customers.id, nextCustomerId), eq(customers.businessUnitId, unit.id), eq(customers.isActive, true))).then((rows) => rows[0]);
@@ -121,27 +239,58 @@ export const WarehouseService = {
         customerId: nextCustomerId, total,
         observations: observations === undefined ? order.observations : (String(observations || "").trim() || null),
         chargeToAccount: chargeToAccount === undefined ? order.chargeToAccount : Boolean(chargeToAccount),
+        version: order.version + 1,
         updatedAt: getArgentinaTime().datetime,
-      }).where(and(eq(warehouseOrders.id, order.id), eq(warehouseOrders.status, "draft"))).returning();
+      }).where(and(eq(warehouseOrders.id, order.id), eq(warehouseOrders.status, "draft"), eq(warehouseOrders.version, order.version))).returning();
       if (!updated) throw { status: 409, message: "El pedido cambió en otra sesión." };
       return (await hydrateOrders([updated], tx))[0];
     });
   },
 
-  async changeOrderStatus(id, nextStatus, userId, unit) {
+  async changeItemStatus(id, itemId, nextStatus, unit, expectedVersion) {
+    assertWarehouse(unit);
+    if (!["preparing", "ready"].includes(nextStatus)) throw { status: 400, message: "El envío y la entrega se confirman para el pedido completo." };
+    return runWarehouseTransaction(async (tx) => {
+      const order = await tx.select().from(warehouseOrders).where(and(eq(warehouseOrders.id, positiveInteger(id, "El pedido")), eq(warehouseOrders.businessUnitId, unit.id))).then((rows) => rows[0]);
+      if (!order) throw { status: 404, message: "Pedido no encontrado." };
+      checkVersion(order, expectedVersion);
+      if (!["confirmed", "preparing"].includes(order.status)) throw { status: 409, message: "La preparación sólo se puede modificar antes de enviar el pedido." };
+      const item = await tx.select().from(warehouseOrderItems).where(and(eq(warehouseOrderItems.orderId, order.id), eq(warehouseOrderItems.id, positiveInteger(itemId, "El producto del pedido")))).then((rows) => rows[0]);
+      if (!item) throw { status: 404, message: "Producto del pedido no encontrado." };
+      if (item.preparationStatus === nextStatus) return { ...(await hydrateOrders([order], tx))[0], duplicated: true };
+      await tx.update(warehouseOrderItems).set({ preparationStatus: nextStatus }).where(eq(warehouseOrderItems.id, item.id)).returning();
+      const [updated] = await tx.update(warehouseOrders).set({
+        readyAt: nextStatus === "preparing" ? null : order.readyAt,
+        version: order.version + 1, updatedAt: warehouseDatetime(),
+      }).where(and(eq(warehouseOrders.id, order.id), eq(warehouseOrders.version, order.version))).returning();
+      if (!updated) throw { status: 409, message: "El pedido cambió en otra sesión. Actualizá antes de reintentar." };
+      return (await hydrateOrders([updated], tx))[0];
+    });
+  },
+
+  async changeOrderStatus(id, nextStatus, userId, unit, expectedVersion) {
     assertWarehouse(unit);
     const requested = String(nextStatus || "").toLowerCase();
-    const allowed = new Set(["confirmed", "preparing", "dispatched", "cancelled"]);
+    const allowed = new Set(["confirmed", "preparing", "ready", "dispatched", "delivered", "cancelled"]);
     if (!allowed.has(requested)) throw { status: 400, message: "Estado de pedido inválido." };
-    return db.transaction(async (tx) => {
+    return runWarehouseTransaction(async (tx) => {
       const order = await tx.select().from(warehouseOrders).where(and(eq(warehouseOrders.id, Number(id)), eq(warehouseOrders.businessUnitId, unit.id))).then((rows) => rows[0]);
       if (!order) throw { status: 404, message: "Pedido no encontrado." };
-      if (order.status === requested) return { ...(await hydrateOrders([order], tx))[0], duplicated: true };
-      const transitions = { draft: ["confirmed", "cancelled"], confirmed: ["preparing", "dispatched", "cancelled"], preparing: ["dispatched", "cancelled"], dispatched: ["cancelled"], cancelled: [] };
-      if (!transitions[order.status]?.includes(requested)) throw { status: 409, message: `No se puede pasar un pedido de ${order.status} a ${requested}.` };
+      checkVersion(order, expectedVersion);
+      if (order.deliveredAt) {
+        if (requested === "delivered") return { ...(await hydrateOrders([order], tx))[0], duplicated: true };
+        throw { status: 409, message: "Un pedido entregado no admite cambios de estado." };
+      }
+      const current = operationalStatus(order);
+      if (current === requested) return { ...(await hydrateOrders([order], tx))[0], duplicated: true };
+      const transitions = { draft: ["confirmed", "cancelled"], confirmed: ["preparing", "ready", "cancelled"], preparing: ["ready", "cancelled"], ready: ["preparing", "dispatched", "cancelled"], dispatched: ["delivered", "cancelled"], cancelled: [] };
+      if (!transitions[current]?.includes(requested)) throw { status: 409, message: "Respetá el flujo En preparación → Listo → En envío → Entregado." };
       if ((requested === "confirmed" || requested === "dispatched") && !order.customerId) throw { status: 400, message: "Seleccioná un cliente antes de confirmar el pedido." };
       const items = await tx.select().from(warehouseOrderItems).where(eq(warehouseOrderItems.orderId, order.id));
-      const { datetime } = getArgentinaTime();
+      const datetime = warehouseDatetime();
+      if (["ready", "dispatched", "delivered"].includes(requested) && (!items.length || items.some((item) => item.preparationStatus !== "ready"))) {
+        throw { status: 409, message: "Todos los productos deben estar listos antes de completar esta etapa. Revisá Ver detalle." };
+      }
 
       if (requested === "dispatched") {
         for (const item of items) {
@@ -185,12 +334,15 @@ export const WarehouseService = {
           });
         }
       }
-      const values = { status: requested, updatedAt: datetime };
+      const values = { status: requested === "delivered" ? "dispatched" : requested === "ready" ? order.status : requested, updatedAt: datetime, version: order.version + 1 };
+      if (requested === "ready") values.readyAt = datetime;
+      if (requested === "preparing") values.readyAt = null;
+      if (requested === "delivered") values.deliveredAt = datetime;
       if (requested === "confirmed") values.confirmedAt = datetime;
       if (requested === "dispatched") values.dispatchedAt = datetime;
       if (requested === "cancelled") values.cancelledAt = datetime;
       const [updated] = await tx.update(warehouseOrders).set(values)
-        .where(and(eq(warehouseOrders.id, order.id), eq(warehouseOrders.status, order.status))).returning();
+        .where(and(eq(warehouseOrders.id, order.id), eq(warehouseOrders.version, order.version), sql`${warehouseOrders.deliveredAt} IS NULL`)).returning();
       if (!updated) throw { status: 409, message: "El pedido cambió en otra sesión. Actualizá la pantalla." };
       return { ...(await hydrateOrders([updated], tx))[0], duplicated: false };
     });
@@ -208,7 +360,7 @@ export const WarehouseService = {
     const cleanSupplier = String(supplier || "").trim();
     if (!cleanSupplier) throw { status: 400, message: "El proveedor es obligatorio." };
     const key = String(idempotencyKey || "").trim() || null;
-    return db.transaction(async (tx) => {
+    return runWarehouseTransaction(async (tx) => {
       if (key) {
         const duplicate = await tx.select().from(warehousePurchases).where(and(eq(warehousePurchases.businessUnitId, unit.id), eq(warehousePurchases.idempotencyKey, key))).then((rows) => rows[0]);
         if (duplicate) return { ...(await hydratePurchases([duplicate], tx))[0], duplicated: true };
@@ -230,7 +382,7 @@ export const WarehouseService = {
     assertWarehouse(unit);
     const requested = String(nextStatus || "").toLowerCase();
     if (!new Set(["received", "cancelled"]).has(requested)) throw { status: 400, message: "Estado de compra inválido." };
-    return db.transaction(async (tx) => {
+    return runWarehouseTransaction(async (tx) => {
       const purchase = await tx.select().from(warehousePurchases).where(and(eq(warehousePurchases.id, Number(id)), eq(warehousePurchases.businessUnitId, unit.id))).then((rows) => rows[0]);
       if (!purchase) throw { status: 404, message: "Compra no encontrada." };
       if (purchase.status === requested) return { ...(await hydratePurchases([purchase], tx))[0], duplicated: true };

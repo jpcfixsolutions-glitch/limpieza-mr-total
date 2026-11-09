@@ -207,6 +207,33 @@ const migrations = [
     ],
   },
   {
+    id: "20261109_017_warehouse_delivery_and_customers",
+    statements: [
+      // Un despacho con delivered_at se expone como entregado. Conserva el
+      // CHECK histórico de estados y evita reconstruir tablas con pedidos.
+      "ALTER TABLE warehouse_orders ADD COLUMN delivered_at TEXT",
+      `CREATE TABLE IF NOT EXISTS warehouse_customer_details (
+        customer_id INTEGER PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+        business_unit_id INTEGER NOT NULL REFERENCES business_units(id) ON DELETE RESTRICT,
+        address TEXT NOT NULL,
+        contact_key TEXT NOT NULL
+      )`,
+      "CREATE UNIQUE INDEX IF NOT EXISTS warehouse_customer_contact_unique ON warehouse_customer_details (business_unit_id, contact_key)",
+      "CREATE INDEX IF NOT EXISTS warehouse_orders_unit_status_idx ON warehouse_orders (business_unit_id, status)",
+    ],
+  },
+  {
+    id: "20261109_018_warehouse_order_preparation",
+    statements: [
+      "ALTER TABLE warehouse_orders ADD COLUMN ready_at TEXT",
+      "ALTER TABLE warehouse_orders ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE warehouse_order_items ADD COLUMN preparation_status TEXT NOT NULL DEFAULT 'preparing' CHECK(preparation_status IN ('preparing','ready'))",
+      // Los despachos históricos ya salieron del Galpón. No se inventan fechas
+      // de preparación ni de entrega para esos documentos.
+      "UPDATE warehouse_order_items SET preparation_status = 'ready' WHERE order_id IN (SELECT id FROM warehouse_orders WHERE status = 'dispatched')",
+    ],
+  },
+  {
     id: "20261011_011_transaction_discount_metadata",
     statements: [
       "ALTER TABLE transactions ADD COLUMN discount_percent REAL NOT NULL DEFAULT 0",

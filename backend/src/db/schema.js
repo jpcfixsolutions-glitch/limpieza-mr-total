@@ -369,6 +369,13 @@ export const accountPaymentDetails = sqliteTable("account_payment_details", {
 
 // ─── Operación mayorista del Galpón ─────────────────────────────────────────
 
+export const warehouseCustomerDetails = sqliteTable("warehouse_customer_details", {
+  customerId: integer("customer_id").primaryKey().references(() => customers.id, { onDelete: "cascade" }),
+  businessUnitId: integer("business_unit_id").notNull().references(() => businessUnits.id, { onDelete: "restrict" }),
+  address: text("address").notNull(),
+  contactKey: text("contact_key").notNull(),
+}, (table) => [uniqueIndex("warehouse_customer_contact_unique").on(table.businessUnitId, table.contactKey)]);
+
 export const warehouseOrders = sqliteTable("warehouse_orders", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   businessUnitId: integer("business_unit_id").notNull().references(() => businessUnits.id, { onDelete: "restrict" }),
@@ -381,6 +388,9 @@ export const warehouseOrders = sqliteTable("warehouse_orders", {
   idempotencyKey: text("idempotency_key"),
   confirmedAt: text("confirmed_at"),
   dispatchedAt: text("dispatched_at"),
+  deliveredAt: text("delivered_at"),
+  readyAt: text("ready_at"),
+  version: integer("version").notNull().default(0),
   cancelledAt: text("cancelled_at"),
   createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
   updatedAt: text("updated_at").default(sql`(datetime('now','localtime'))`),
@@ -394,6 +404,7 @@ export const warehouseOrderItems = sqliteTable("warehouse_order_items", {
   productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
   productName: text("product_name").notNull(),
   quantity: integer("quantity").notNull(),
+  preparationStatus: text("preparation_status", { enum: ["preparing", "ready"] }).notNull().default("preparing"),
   unitPrice: real("unit_price").notNull(),
   unitCost: real("unit_cost").notNull(),
   total: real("total").notNull(),

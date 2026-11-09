@@ -6,10 +6,14 @@ import { requireBusinessUnit } from "../middleware/businessUnit.middleware.js";
 
 const router = Router();
 router.use(authenticate, requireRole("admin"), requireBusinessUnit("WAREHOUSE"));
+router.get("/operations", WarehouseController.operations);
+router.post("/production-preview", WarehouseController.productionPreview);
+router.post("/customers", WarehouseController.createCustomer);
 router.get("/orders", WarehouseController.listOrders);
 router.post("/orders", WarehouseController.createOrder);
 router.put("/orders/:id", WarehouseController.updateOrder);
 router.patch("/orders/:id/status", WarehouseController.changeOrderStatus);
+router.patch("/orders/:id/items/:itemId/status", WarehouseController.changeItemStatus);
 router.get("/purchases", WarehouseController.listPurchases);
 router.post("/purchases", WarehouseController.createPurchase);
 router.patch("/purchases/:id/status", WarehouseController.changePurchaseStatus);
