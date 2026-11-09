@@ -10,6 +10,16 @@ function isOpenRegisterConflict(error) {
   return message.includes("cash_registers_single_open_idx") || message.includes("cash_registers.is_open");
 }
 
+function groupBy(rows, key) {
+  const groups = new Map();
+  for (const row of rows) {
+    const group = groups.get(row[key]) || [];
+    group.push(row);
+    groups.set(row[key], group);
+  }
+  return groups;
+}
+
 function buildClosedRegisterSummary(
   register,
   txs,
@@ -210,17 +220,24 @@ export const CashRegisterService = {
 
   async getClosed() {
     const closedRegisters = await CashRegisterModel.findClosed();
+    if (!closedRegisters.length) return [];
+    const data = await CashRegisterModel.findClosedHistoryData();
+    const txsByRegister = groupBy(data.txs, "registerId");
+    const paymentsByTransaction = groupBy(data.payments, "transactionId");
+    const itemsByTransaction = groupBy(data.items, "transactionId");
+    const expensesByRegister = groupBy(data.expenses, "registerId");
+    const accountPaymentsByRegister = groupBy(data.accountPayments, "registerId");
     const result = [];
 
     for (const register of closedRegisters) {
-      const txs = await TransactionModel.findByRegisterId(register.id);
+      const txs = txsByRegister.get(register.id) || [];
       const allPayments = [];
       const allItems = [];
       const detailedTransactions = [];
 
       for (const tx of txs) {
-        const payments = await TransactionModel.findPaymentsByTransactionId(tx.id);
-        const items = await TransactionModel.findItemsByTransactionId(tx.id);
+        const payments = paymentsByTransaction.get(tx.id) || [];
+        const items = itemsByTransaction.get(tx.id) || [];
         allPayments.push(...payments);
         allItems.push(...items);
         detailedTransactions.push({
@@ -243,8 +260,8 @@ export const CashRegisterService = {
         });
       }
 
-      const dailyExpenses = await DailyExpenseModel.findByRegisterId(register.id);
-      const accountPayments = await AccountMovementModel.findPaymentsByRegisterId(register.id);
+      const dailyExpenses = expensesByRegister.get(register.id) || [];
+      const accountPayments = accountPaymentsByRegister.get(register.id) || [];
       result.push({
         ...buildClosedRegisterSummary(
           register,

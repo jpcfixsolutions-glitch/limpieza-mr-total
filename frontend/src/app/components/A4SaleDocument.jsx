@@ -21,7 +21,18 @@ export function A4SaleDocument({ transaction }) {
 
   return createPortal(
     <>
-      <style className="print-document">{"@media print { @page { size: A4 portrait; margin: 10mm; } }"}</style>
+      <style className="print-document">{`@media print {
+        @page remito {
+          size: A4 portrait;
+          margin: 10mm;
+          @top-left { content: ""; }
+          @top-center { content: ""; }
+          @top-right { content: ""; }
+          @bottom-left { content: ""; }
+          @bottom-center { content: ""; }
+          @bottom-right { content: counter(page) "/" counter(pages); font: 9px Arial, sans-serif; }
+        }
+      }`}</style>
       <article className="print-document a4-ticket" aria-hidden="true">
         <header className="a4-ticket__header">
           <div className="a4-ticket__brand">

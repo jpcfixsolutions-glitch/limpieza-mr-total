@@ -103,9 +103,11 @@ export function CuentasCorrientesView() {
 
   const term = search.trim().toLowerCase();
   const filtered = customers.filter((c) =>
-    !term ||
-    `${c.name} ${c.lastName}`.toLowerCase().includes(term) ||
-    String(c.document).includes(term)
+    (activeTab !== "clients" || Number(c.debt || 0) > 0) && (
+      !term ||
+      `${c.name} ${c.lastName}`.toLowerCase().includes(term) ||
+      String(c.document).includes(term)
+    )
   );
 
   const totalDeuda = customers.reduce((sum, c) => sum + Number(c.debt || 0), 0);
@@ -113,7 +115,7 @@ export function CuentasCorrientesView() {
 
   const openPaymentModal = () => {
     setPaymentModal({
-      payments: [{ paymentMethodId: paymentMethods[0]?.id || "", amount: String(detail.debt.toFixed(2)) }],
+      payments: [{ paymentMethodId: paymentMethods[0]?.id || "", amount: "0.00" }],
       description: "",
     });
   };
@@ -125,18 +127,26 @@ export function CuentasCorrientesView() {
     }
   }, [detail, paymentRequestId]);
 
+  const payments = (paymentModal?.payments || []).map((payment) => ({
+    paymentMethodId: Number(payment.paymentMethodId),
+    amount: Math.round(Number(payment.amount) * 100) / 100,
+  }));
+  const paymentTotal = Math.round(payments.reduce((sum, payment) => sum + payment.amount, 0) * 100) / 100;
+  const validPaymentEntries = payments.length > 0 && payments.every((payment) =>
+    paymentMethods.some((method) => method.id === payment.paymentMethodId) &&
+    Number.isFinite(payment.amount) && payment.amount > 0
+  );
+  const paymentExceedsDebt = paymentTotal > Number(detail?.debt || 0);
+  const canRegisterPayment = validPaymentEntries && !paymentExceedsDebt && Number(detail?.debt || 0) > 0;
+
   const handleRegisterPayment = async (printAfter = false) => {
     if (submitting || !paymentModal) return;
-    const payments = paymentModal.payments.map((payment) => ({
-      paymentMethodId: Number(payment.paymentMethodId),
-      amount: Number(payment.amount),
-    }));
-    if (!payments.length || payments.some((payment) => !Number.isInteger(payment.paymentMethodId) || payment.paymentMethodId <= 0 || !Number.isFinite(payment.amount) || payment.amount <= 0)) {
+    if (!validPaymentEntries) {
       toast.error("Indicá un importe mayor a cero para cada método");
       return;
     }
-    const amount = payments.reduce((sum, payment) => sum + payment.amount, 0);
-    if (amount > detail.debt + 0.009) {
+    const amount = paymentTotal;
+    if (paymentExceedsDebt) {
       toast.error("El pago no puede superar la deuda actual");
       return;
     }
@@ -387,22 +397,23 @@ export function CuentasCorrientesView() {
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between gap-3 mb-2"><label className="text-foreground/80 font-bold text-sm">Métodos e importes</label><button type="button" onClick={() => setPaymentModal((prev) => ({ ...prev, payments: [...prev.payments, { paymentMethodId: paymentMethods[0]?.id || "", amount: "" }] }))} className="text-primary font-bold text-sm flex items-center gap-1"><Plus size={16}/> Agregar otro método</button></div>
+                  <div className="flex items-center justify-between gap-3 mb-2"><label className="text-foreground/80 font-bold text-sm">Métodos e importes</label><button type="button" onClick={() => setPaymentModal((prev) => ({ ...prev, payments: [...prev.payments, { paymentMethodId: paymentMethods[0]?.id || "", amount: "0.00" }] }))} className="text-primary font-bold text-sm flex items-center gap-1"><Plus size={16}/> Agregar otro método</button></div>
                   <div className="space-y-2">
                     {paymentModal.payments.map((payment, index) => (
                       <div key={index} className="flex gap-2 items-center">
                         <select value={payment.paymentMethodId} onChange={(e) => setPaymentModal((prev) => ({ ...prev, payments: prev.payments.map((row, rowIndex) => rowIndex === index ? { ...row, paymentMethodId: e.target.value } : row) }))} className="min-w-0 flex-1 bg-surface text-foreground font-bold rounded-xl px-3 py-3 border border-foreground/15 focus:border-primary outline-none shadow-sm">
                           <option value="">Método de pago</option>{paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}
                         </select>
-                        <div className="relative w-32"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground/60 font-bold">$</span><input type="number" value={payment.amount} onChange={(e) => setPaymentModal((prev) => ({ ...prev, payments: prev.payments.map((row, rowIndex) => rowIndex === index ? { ...row, amount: e.target.value } : row) }))} onFocus={(e) => e.target.select()} className="w-full bg-surface text-foreground font-bold rounded-xl pl-7 pr-2 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm" step="0.01" min="0" /></div>
+                        <div className="relative w-32"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground/60 font-bold">$</span><input type="number" value={payment.amount} onChange={(e) => setPaymentModal((prev) => ({ ...prev, payments: prev.payments.map((row, rowIndex) => rowIndex === index ? { ...row, amount: e.target.value } : row) }))} onFocus={(e) => e.target.select()} className="w-full bg-surface text-foreground font-bold rounded-xl pl-7 pr-2 py-3 border border-foreground/15 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none shadow-sm" step="0.01" min="0" max={detail.debt} aria-label={`Importe del método ${index + 1}`} /></div>
                         <button type="button" onClick={() => setPaymentModal((prev) => ({ ...prev, payments: prev.payments.filter((_, rowIndex) => rowIndex !== index) }))} disabled={paymentModal.payments.length === 1} className="p-2 text-red-500 disabled:text-foreground/30" title="Quitar método"><X size={18}/></button>
                       </div>
                     ))}
                   </div>
-                  <p className="text-foreground/60 font-medium text-xs mt-2">El cobro se distribuye en caja según cada método elegido.</p>
+                  <p className="text-foreground/60 font-medium text-xs mt-2">Ingresá un importe mayor a cero en cada método. El cobro se distribuye en caja según cada método elegido.</p>
                 </div>
-                <div className="grid grid-cols-2 gap-3"><div className="bg-surface rounded-xl px-4 py-3"><p className="text-xs text-foreground/60 font-bold">TOTAL DEL PAGO</p><p className="font-black text-success text-lg">${paymentModal.payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0).toFixed(2)}</p></div><div className="bg-surface rounded-xl px-4 py-3"><p className="text-xs text-foreground/60 font-bold">SALDO RESTANTE</p><p className="font-black text-secondary text-lg">${Math.max(0, detail.debt - paymentModal.payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0)).toFixed(2)}</p></div></div>
+                <div className="grid grid-cols-2 gap-3"><div className="bg-surface rounded-xl px-4 py-3"><p className="text-xs text-foreground/60 font-bold">TOTAL DEL PAGO</p><p className="font-black text-success text-lg">${(Number.isFinite(paymentTotal) ? paymentTotal : 0).toFixed(2)}</p></div><div className="bg-surface rounded-xl px-4 py-3"><p className="text-xs text-foreground/60 font-bold">SALDO RESTANTE</p><p className="font-black text-secondary text-lg">${Math.max(0, detail.debt - (Number.isFinite(paymentTotal) ? paymentTotal : 0)).toFixed(2)}</p></div></div>
                 <button onClick={() => setPaymentModal((prev) => ({ ...prev, payments: [{ paymentMethodId: prev.payments[0]?.paymentMethodId || paymentMethods[0]?.id || "", amount: String(detail.debt.toFixed(2)) }] }))} className="w-full bg-secondary hover:brightness-125 text-foreground font-bold py-3 rounded-xl transition-all shadow-sm">Saldar todo con un método</button>
+                {paymentExceedsDebt && <p role="alert" className="text-red-500 text-sm font-bold">El total del pago no puede superar la deuda pendiente.</p>}
                 <div><label className="text-foreground/80 font-bold text-sm block mb-2">Descripción (opcional)</label><input value={paymentModal.description || ""} onChange={(e) => setPaymentModal((prev) => ({ ...prev, description: e.target.value }))} className="w-full bg-surface text-foreground font-bold rounded-xl px-4 py-3 border border-foreground/15" placeholder="Ej. Pago parcial" /></div>
               </div>
 
@@ -412,14 +423,14 @@ export function CuentasCorrientesView() {
                 </button>
                 <button
                   onClick={() => handleRegisterPayment(false)}
-                  disabled={submitting}
+                  disabled={submitting || !canRegisterPayment}
                   className="flex-1 bg-surface hover:bg-success/10 border border-success/30 disabled:text-foreground/50 text-success font-bold py-3 rounded-xl transition-all shadow-sm"
                 >
                   {submitting ? "Registrando..." : "Registrar sin imprimir"}
                 </button>
                 <button
                   onClick={() => handleRegisterPayment(true)}
-                  disabled={submitting}
+                  disabled={submitting || !canRegisterPayment}
                   className="flex-1 bg-success hover:brightness-125 disabled:bg-surface disabled:text-foreground/50 text-foreground font-bold py-3 rounded-xl transition-all shadow-md flex items-center justify-center gap-2"
                 >
                   <Printer size={17} /> {submitting ? "Registrando..." : "Registrar e imprimir"}
@@ -458,7 +469,7 @@ export function CuentasCorrientesView() {
         </div>
       </div>
 
-      <div className="flex gap-2 border-b border-foreground/15 mb-6"><button onClick={() => setActiveTab("clients")} className={`px-4 py-3 font-bold text-sm border-b-2 transition-colors ${activeTab === "clients" ? "border-secondary text-foreground" : "border-transparent text-foreground/60 hover:text-foreground"}`}>Clientes registrados</button><button onClick={() => setActiveTab("movements")} className={`px-4 py-3 font-bold text-sm border-b-2 transition-colors ${activeTab === "movements" ? "border-secondary text-foreground" : "border-transparent text-foreground/60 hover:text-foreground"}`}>Historial de movimientos</button></div>
+      <div className="flex gap-2 overflow-x-auto border-b border-foreground/15 mb-6"><button onClick={() => setActiveTab("clients")} className={`shrink-0 whitespace-nowrap px-4 py-3 font-bold text-sm border-b-2 transition-colors ${activeTab === "clients" ? "border-secondary text-foreground" : "border-transparent text-foreground/60 hover:text-foreground"}`}>Cuentas activas</button><button onClick={() => setActiveTab("all")} className={`shrink-0 whitespace-nowrap px-4 py-3 font-bold text-sm border-b-2 transition-colors ${activeTab === "all" ? "border-secondary text-foreground" : "border-transparent text-foreground/60 hover:text-foreground"}`}>Todos los clientes</button><button onClick={() => setActiveTab("movements")} className={`shrink-0 whitespace-nowrap px-4 py-3 font-bold text-sm border-b-2 transition-colors ${activeTab === "movements" ? "border-secondary text-foreground" : "border-transparent text-foreground/60 hover:text-foreground"}`}>Historial de movimientos</button></div>
 
       {activeTab === "movements" ? (
         movements.length === 0 ? <p className="text-foreground/60 font-medium text-center py-12">Todavía no hay movimientos registrados.</p> : <div className="bg-surface rounded-xl overflow-hidden border border-foreground/15 shadow-sm"><div className="overflow-x-auto"><table className="w-full min-w-[700px]"><thead><tr className="border-b border-foreground/15"><th className="text-left p-4">Fecha</th><th className="text-left p-4">Cliente</th><th className="text-left p-4">Movimiento</th><th className="text-left p-4">Detalle</th><th className="text-right p-4">Monto</th></tr></thead><tbody>{movements.map((movement) => <tr key={movement.id} className="border-b border-foreground/15 hover:bg-background/50"><td className="p-4 text-sm text-foreground/70">{formatDateTime(movement.createdAt)}</td><td className="p-4 font-bold">{movement.customerName} {movement.customerLastName}<span className="block text-xs text-foreground/60">DNI {movement.document}</span></td><td className="p-4"><span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-bold ${movement.type === "cargo" ? "bg-primary/20 text-primary" : "bg-success/10 text-success"}`}>{movement.type === "cargo" ? "Cargo" : "Cobro"}</span></td><td className="p-4 text-sm text-foreground/70">{movement.type === "pago" ? <><span className="block">{movement.detail || (movement.paymentDetails?.length > 1 ? "Pago combinado" : movement.methodName || "Cobro")}</span>{movement.paymentDetails?.length > 0 && <span className="block text-xs mt-1">{movement.paymentDetails.map((payment) => `${payment.methodName}: $${Number(payment.amount).toFixed(2)}`).join(" · ")}</span>}</> : (movement.transactionId ? `Venta #${movement.transactionId}` : "Deuda inicial")}</td><td className={`p-4 text-right font-black ${movement.type === "cargo" ? "text-secondary" : "text-success"}`}>{movement.type === "cargo" ? "+" : "-"}${Number(movement.amount).toFixed(2)}</td></tr>)}</tbody></table></div></div>
@@ -478,9 +489,9 @@ export function CuentasCorrientesView() {
 
       {filtered.length === 0 ? (
         <p className="text-foreground/60 font-medium text-center py-12">
-          {customers.length === 0
-            ? "Todavía no hay clientes con cuenta corriente."
-            : "No se encontraron clientes con esa búsqueda."}
+          {term ? "No se encontraron clientes con esa búsqueda."
+            : activeTab === "clients" ? "No hay cuentas con deuda pendiente."
+            : "Todavía no hay clientes con cuenta corriente."}
         </p>
       ) : (
         <div className="bg-surface rounded-xl overflow-hidden border border-foreground/15 shadow-sm">

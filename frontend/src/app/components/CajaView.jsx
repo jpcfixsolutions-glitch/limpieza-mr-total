@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import { Lock, Calendar, Clock, Unlock, Eye, EyeOff, Banknote, Calculator, FileText, CheckCircle2, TrendingUp, AlertTriangle, Printer } from "lucide-react";
 import { toast } from "sonner";
 import api from "../../services/api.js";
@@ -19,6 +19,7 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
   const [dateTo, setDateTo] = useState("");
   const [cajasCerradas, setCajasCerradas] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const [gastosEfectivo, setGastosEfectivo] = useState(0);
   const [cobrosCuenta, setCobrosCuenta] = useState([]);
   const [showIngresos, setShowIngresos] = useState(false);
@@ -32,15 +33,29 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
     startA4Print,
   } = useSalePrinting();
 
-  useEffect(() => {
-    if (role === "admin") {
-      setLoading(true);
-      api.get("/cash-register/closed")
-        .then((r) => setCajasCerradas(r.data))
-        .catch(() => {})
-        .finally(() => setLoading(false));
+  const loadClosedRegisters = useCallback(async (signal) => {
+    setLoading(true);
+    setHistoryError("");
+    try {
+      const response = await api.get("/cash-register/closed", { signal });
+      if (!signal?.aborted) setCajasCerradas(response.data);
+    } catch (err) {
+      if (!signal?.aborted) {
+        setHistoryError(err.code === "ECONNABORTED"
+          ? "La carga del historial tardó demasiado. Intentá nuevamente."
+          : "No se pudo cargar el historial de cajas cerradas. Intentá nuevamente.");
+      }
+    } finally {
+      if (!signal?.aborted) setLoading(false);
     }
-  }, [role, isCajaOpen]);
+  }, []);
+
+  useEffect(() => {
+    if (role !== "admin") return;
+    const controller = new AbortController();
+    loadClosedRegisters(controller.signal);
+    return () => controller.abort();
+  }, [role, isCajaOpen, loadClosedRegisters]);
 
   useEffect(() => {
     if (isCajaOpen && register?.id) {
@@ -90,8 +105,6 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
       await onCloseCaja(closureData);
       setShowClosureModal(false);
       toast.success("Caja cerrada exitosamente con arqueo");
-      const r = await api.get("/cash-register/closed");
-      setCajasCerradas(r.data);
     } catch (err) {
       toast.error(err.response?.data?.message || "Error al cerrar caja");
       throw err;
@@ -255,6 +268,13 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
             )}
           </div>
 
+          {historyError && (
+            <div role="alert" className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-foreground">
+              <p>{historyError}</p>
+              {cajasCerradas.length > 0 && <p className="mt-1 text-sm">Se muestra el último historial cargado.</p>}
+              <button type="button" onClick={() => loadClosedRegisters()} disabled={loading} className="mt-2 font-bold underline disabled:opacity-50">Reintentar</button>
+            </div>
+          )}
           <div className="bg-surface rounded-xl overflow-hidden border border-foreground/15 shadow-sm">
             <table className="w-full">
               <thead>
@@ -502,7 +522,7 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
                     </Fragment>
                   ))
                 ) : (
-                  <tr><td colSpan={4} className="p-8 text-center text-foreground/60 font-medium">No se encontraron cajas cerradas.</td></tr>
+                  <tr><td colSpan={4} className="p-8 text-center text-foreground/60 font-medium">{loading ? "Cargando historial…" : historyError ? "El historial no está disponible. Reintentá la carga." : "No se encontraron cajas cerradas."}</td></tr>
                 )}
               </tbody>
             </table>
