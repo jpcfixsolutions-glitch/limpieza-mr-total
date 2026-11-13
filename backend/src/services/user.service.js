@@ -13,7 +13,7 @@ export const UserService = {
       throw { status: 403, message: "No puedes modificar este usuario." };
     }
 
-    const validRoles = ["admin", "cajero"];
+    const validRoles = ["admin", "cajero", "EMPLEADO_GALPON"];
     if (role && !validRoles.includes(role)) {
       throw { status: 400, message: "Rol inválido." };
     }

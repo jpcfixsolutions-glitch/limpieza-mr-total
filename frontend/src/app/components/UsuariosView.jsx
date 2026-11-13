@@ -93,7 +93,7 @@ export function UsuariosView() {
                   <td className="p-4">
                     <span className={`px-3 py-1 rounded-full text-sm flex items-center gap-1.5 w-fit font-bold shadow-sm ${user.role === "admin" ? "bg-primary/20 text-foreground" : "bg-primary/10 text-primary"}`}>
                       {user.role === "admin" ? <Shield size={14} /> : <User size={14} />}
-                      {user.role === "admin" ? "Administrador" : "Cajero"}
+                      {user.role === "admin" ? "Administrador" : user.role === "EMPLEADO_GALPON" ? "Empleado del galpón" : "Cajero"}
                     </span>
                   </td>
                   <td className="p-4 text-center">
@@ -125,23 +125,24 @@ export function UsuariosView() {
             <div className="p-6 space-y-4">
               <div>
                 <label className="text-foreground/80 font-bold text-sm block mb-2">Nombre Completo</label>
-                <input type="text" value={userModal.item.name} onChange={(e) => setUserModal((prev) => ({ ...prev, item: { ...prev.item, name: e.target.value } }))} className="w-full bg-surface text-foreground placeholder-foreground/50 rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-bold shadow-sm transition-colors" placeholder="Ej. Juan Pérez" />
+                <input aria-label="Nombre Completo" type="text" value={userModal.item.name} onChange={(e) => setUserModal((prev) => ({ ...prev, item: { ...prev.item, name: e.target.value } }))} className="w-full bg-surface text-foreground placeholder-foreground/50 rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-bold shadow-sm transition-colors" placeholder="Ej. Juan Pérez" />
               </div>
               {userModal.isNew && (
                 <div>
                   <label className="text-foreground/80 font-bold text-sm block mb-2">Email</label>
-                  <input type="email" value={userModal.item.email} onChange={(e) => setUserModal((prev) => ({ ...prev, item: { ...prev.item, email: e.target.value } }))} className="w-full bg-surface text-foreground placeholder-foreground/50 rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-bold shadow-sm transition-colors" placeholder="usuario" />
+                  <input aria-label="Email" type="email" value={userModal.item.email} onChange={(e) => setUserModal((prev) => ({ ...prev, item: { ...prev.item, email: e.target.value } }))} className="w-full bg-surface text-foreground placeholder-foreground/50 rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-bold shadow-sm transition-colors" placeholder="usuario" />
                 </div>
               )}
               <div>
                 <label className="text-foreground/80 font-bold text-sm block mb-2">{userModal.isNew ? "Contraseña" : "Nueva contraseña (opcional)"}</label>
-                <input type="password" value={userModal.item.password} onChange={(e) => setUserModal((prev) => ({ ...prev, item: { ...prev.item, password: e.target.value } }))} className="w-full bg-surface text-foreground placeholder-foreground/50 rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-bold shadow-sm transition-colors" placeholder={userModal.isNew ? "Contraseña" : "Dejar vacío para no cambiar"} />
+                <input aria-label="Contraseña" type="password" value={userModal.item.password} onChange={(e) => setUserModal((prev) => ({ ...prev, item: { ...prev.item, password: e.target.value } }))} className="w-full bg-surface text-foreground placeholder-foreground/50 rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-bold shadow-sm transition-colors" placeholder={userModal.isNew ? "Contraseña" : "Dejar vacío para no cambiar"} />
               </div>
               <div>
                 <label className="text-foreground/80 font-bold text-sm block mb-2">Rol</label>
-                <select value={userModal.item.role} onChange={(e) => setUserModal((prev) => ({ ...prev, item: { ...prev.item, role: e.target.value } }))} className="w-full bg-surface text-foreground rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-bold shadow-sm transition-colors">
+                <select aria-label="Rol" value={userModal.item.role} onChange={(e) => setUserModal((prev) => ({ ...prev, item: { ...prev.item, role: e.target.value } }))} className="w-full bg-surface text-foreground rounded-xl px-4 py-3 border border-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-bold shadow-sm transition-colors">
                   <option value="admin">Administrador</option>
                   <option value="cajero">Cajero</option>
+                  <option value="EMPLEADO_GALPON">Empleado del galpón</option>
                 </select>
               </div>
             </div>

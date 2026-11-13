@@ -1,4 +1,4 @@
-import { ShoppingCart, Package, DollarSign, Settings, LogOut, Home, BarChart3, Users, ShieldCheck, NotebookPen, Warehouse, ClipboardList, Truck, ArrowLeftRight } from "lucide-react";
+import { ShoppingCart, Package, DollarSign, Settings, LogOut, Home, BarChart3, Users, ShieldCheck, NotebookPen, Warehouse, ClipboardList } from "lucide-react";
 import logo from "../../img/Logotipo Mister Total con Aro Azul.png";
 
 export function Sidebar({ activeView, onViewChange, role, onLogout, businessUnit = "LOCAL", onBusinessUnitChange }) {
@@ -14,16 +14,14 @@ export function Sidebar({ activeView, onViewChange, role, onLogout, businessUnit
     { id: "configuracion", icon: Settings, label: "Config", roles: ["admin"] },
   ];
   const warehouseMenuItems = [
-    { id: "warehouse-home", icon: Home, label: "Inicio", roles: ["admin"] },
-    { id: "warehouse-orders", icon: ClipboardList, label: "Pedidos", roles: ["admin"] },
-    { id: "warehouse-stock", icon: Package, label: "Stock e insumos", roles: ["admin"] },
-    { id: "warehouse-purchases", icon: Truck, label: "Compras", roles: ["admin"] },
+    { id: "warehouse-home", icon: Home, label: "Inicio", roles: ["admin", "EMPLEADO_GALPON"] },
+    { id: "warehouse-orders", icon: ClipboardList, label: "Pedidos", roles: ["admin", "EMPLEADO_GALPON"] },
+    { id: "warehouse-stock", icon: Package, label: role === "EMPLEADO_GALPON" ? "Stock" : "Stock e insumos", roles: ["admin", "EMPLEADO_GALPON"] },
     { id: "warehouse-customers", icon: NotebookPen, label: "Clientes y cuentas", roles: ["admin"] },
-    { id: "warehouse-movements", icon: ArrowLeftRight, label: "Movimientos", roles: ["admin"] },
     { id: "warehouse-stats", icon: BarChart3, label: "Estadísticas", roles: ["admin"] },
   ];
 
-  const visibleMenuItems = (businessUnit === "WAREHOUSE" ? warehouseMenuItems : localMenuItems).filter((item) => item.roles.includes(role));
+  const visibleMenuItems = (businessUnit === "WAREHOUSE" || role === "EMPLEADO_GALPON" ? warehouseMenuItems : localMenuItems).filter((item) => item.roles.includes(role));
 
   return (
     <>

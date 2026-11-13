@@ -1,6 +1,7 @@
 import { getTableColumns, getTableName } from "drizzle-orm";
 import * as schema from "./schema.js";
 import { client } from "./client.js";
+import { warehouseFinanceMigration } from "./warehouseFinanceMigration.js";
 
 const MIGRATIONS_TABLE = "app_migrations";
 
@@ -460,6 +461,8 @@ const migrations = [
     ],
   },
 ];
+
+migrations.push(warehouseFinanceMigration);
 
 function quoteIdentifier(identifier) {
   return `"${String(identifier).replaceAll('"', '""')}"`;

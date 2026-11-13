@@ -14,7 +14,7 @@ export const users = sqliteTable("users", {
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
-  role: text("role", { enum: ["admin", "cajero", "creador"] }).notNull().default("cajero"),
+  role: text("role", { enum: ["admin", "cajero", "creador", "EMPLEADO_GALPON"] }).notNull().default("cajero"),
   createdAt: text("created_at").default(sql`(datetime('now','localtime'))`),
 });
 
@@ -368,6 +368,35 @@ export const accountPaymentDetails = sqliteTable("account_payment_details", {
 });
 
 // ─── Operación mayorista del Galpón ─────────────────────────────────────────
+
+export const warehouseReceipts = sqliteTable("warehouse_receipts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessUnitId: integer("business_unit_id").notNull().references(() => businessUnits.id),
+  orderId: integer("order_id").notNull().references(() => warehouseOrders.id),
+  cashCents: integer("cash_cents").notNull().default(0),
+  transferCents: integer("transfer_cents").notNull().default(0),
+  occurredAt: text("occurred_at").notNull(),
+  reversalOfId: integer("reversal_of_id").unique().references(() => warehouseReceipts.id),
+  reason: text("reason"), userId: integer("user_id").references(() => users.id),
+  idempotencyKey: text("idempotency_key").notNull(), createdAt: text("created_at").notNull(),
+}, (t) => [uniqueIndex("warehouse_receipts_unit_key").on(t.businessUnitId, t.idempotencyKey)]);
+
+export const warehouseExpenses = sqliteTable("warehouse_expenses", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessUnitId: integer("business_unit_id").notNull().references(() => businessUnits.id),
+  concept: text("concept").notNull(), description: text("description"),
+  amountCents: integer("amount_cents").notNull(), method: text("method").notNull(),
+  occurredAt: text("occurred_at").notNull(), userId: integer("user_id").references(() => users.id),
+  idempotencyKey: text("idempotency_key").notNull(), createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(), deletedAt: text("deleted_at"), version: integer("version").notNull().default(0),
+}, (t) => [uniqueIndex("warehouse_expenses_unit_key").on(t.businessUnitId, t.idempotencyKey)]);
+
+export const warehouseExpenseAudit = sqliteTable("warehouse_expense_audit", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  expenseId: integer("expense_id").notNull().references(() => warehouseExpenses.id),
+  action: text("action").notNull(), snapshot: text("snapshot").notNull(),
+  userId: integer("user_id").references(() => users.id), createdAt: text("created_at").notNull(),
+});
 
 export const warehouseCustomerDetails = sqliteTable("warehouse_customer_details", {
   customerId: integer("customer_id").primaryKey().references(() => customers.id, { onDelete: "cascade" }),

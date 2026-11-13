@@ -12,6 +12,7 @@ export function SubscriptionProvider({ children, userRole }) {
   });
 
   const fetchStatus = useCallback(async () => {
+    if (userRole === "EMPLEADO_GALPON") return;
     // El creador nunca es bloqueado, pero puede consultar el estado
     try {
       const { data } = await api.get("/subscription/status");
@@ -19,13 +20,14 @@ export function SubscriptionProvider({ children, userRole }) {
     } catch {
       // Si falla (sin conexión, etc.) no bloqueamos
     }
-  }, []);
+  }, [userRole]);
 
   useEffect(() => {
+    if (userRole === "EMPLEADO_GALPON") return;
     fetchStatus();
     const interval = setInterval(fetchStatus, 60000);
     return () => clearInterval(interval);
-  }, [fetchStatus]);
+  }, [fetchStatus, userRole]);
 
   const setCutoffDay = async (day) => {
     const { data } = await api.post("/subscription/set-cutoff", { cutoffDay: day });
@@ -39,8 +41,12 @@ export function SubscriptionProvider({ children, userRole }) {
     return data;
   };
 
+  const applyOperationalAccess = useCallback((access) => {
+    setStatus((previous) => ({ ...previous, isExpired: access.isExpired, isWarningPhase: access.isWarningPhase, daysRemaining: access.daysRemaining }));
+  }, []);
+
   return (
-    <SubscriptionContext.Provider value={{ ...status, setCutoffDay, reactivate, refresh: fetchStatus }}>
+    <SubscriptionContext.Provider value={{ ...status, setCutoffDay, reactivate, refresh: fetchStatus, applyOperationalAccess }}>
       {children}
     </SubscriptionContext.Provider>
   );
@@ -50,4 +56,9 @@ export function useSubscription() {
   const ctx = useContext(SubscriptionContext);
   if (!ctx) throw new Error("useSubscription debe usarse dentro de SubscriptionProvider");
   return ctx;
+}
+
+// Las vistas operativas también se prueban de forma aislada, sin el proveedor.
+export function useOperationalAccessSync() {
+  return useContext(SubscriptionContext)?.applyOperationalAccess;
 }

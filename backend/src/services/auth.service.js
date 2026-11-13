@@ -45,9 +45,9 @@ export const AuthService = {
       throw { status: 409, message: "Ya existe un usuario con ese email." };
     }
 
-    const validRoles = ["admin", "cajero"];
+    const validRoles = ["admin", "cajero", "EMPLEADO_GALPON"];
     if (!validRoles.includes(role)) {
-      throw { status: 400, message: "Rol inválido. Debe ser 'admin' o 'cajero'." };
+      throw { status: 400, message: "Rol inválido." };
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);

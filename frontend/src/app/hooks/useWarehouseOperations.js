@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import api from "../../services/api.js";
+import { useOperationalAccessSync } from "../modules/subscription/SubscriptionContext.jsx";
 
 // Inicio y Pedidos consumen la misma instantánea y el mismo cálculo del servidor.
 export function useWarehouseOperations() {
+  const syncAccess = useOperationalAccessSync();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -17,13 +19,14 @@ export function useWarehouseOperations() {
       if (!controller.signal.aborted) {
         setData(response.data);
         setError("");
+        if (response.data.access) syncAccess?.(response.data.access);
       }
     } catch (err) {
       if (!controller.signal.aborted) setError(err.response?.data?.message || "No se pudieron actualizar los pedidos y la producción del Galpón.");
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, []);
+  }, [syncAccess]);
 
   useEffect(() => {
     refresh();

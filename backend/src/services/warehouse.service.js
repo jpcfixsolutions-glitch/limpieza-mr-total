@@ -13,7 +13,7 @@ import { calculateWarehouseProduction } from "./warehouseProduction.js";
 // la misma conexión. Encolar Galpón evita bloqueos del driver; la versión y el
 // UPDATE condicional siguen protegiendo cambios entre sesiones/procesos.
 let warehouseQueue = Promise.resolve();
-function runWarehouseTransaction(operation) {
+export function runWarehouseTransaction(operation) {
   const result = warehouseQueue.then(() => db.transaction(operation));
   warehouseQueue = result.then(() => undefined, () => undefined);
   return result;
@@ -99,6 +99,34 @@ async function snapshotItems(tx, unitId, rawItems, kind) {
 }
 
 export const WarehouseService = {
+  async updateStock(productId, payload, userId, unit) {
+    assertWarehouse(unit);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw { status: 400, message: "Indicá la cantidad de stock y la operación a realizar." };
+    if (Object.keys(payload).some((key) => !["stock", "expectedStock", "idempotencyKey"].includes(key))) throw { status: 400, message: "Sólo se permite modificar la cantidad de stock." };
+    const { stock, expectedStock, idempotencyKey } = payload;
+    if (!Number.isSafeInteger(stock) || stock < 0 || !Number.isSafeInteger(expectedStock) || expectedStock < 0) throw { status: 400, message: "El stock debe ser una cantidad entera igual o mayor a cero." };
+    if (typeof idempotencyKey !== "string" || !idempotencyKey.trim() || idempotencyKey.length > 160) throw { status: 400, message: "La modificación necesita una clave de operación válida." };
+    const id = positiveInteger(productId, "El producto");
+    const key = `warehouse-stock:${userId}:${idempotencyKey}`;
+    return runWarehouseTransaction(async (tx) => {
+      const balance = await tx.select().from(businessUnitProducts).where(and(eq(businessUnitProducts.businessUnitId, unit.id), eq(businessUnitProducts.productId, id))).then((rows) => rows[0]);
+      if (!balance) throw { status: 404, message: "El producto no existe en el stock del Galpón." };
+      const duplicate = await tx.select().from(inventoryMovements).where(eq(inventoryMovements.idempotencyKey, key)).then((rows) => rows[0]);
+      if (duplicate) {
+        if (duplicate.productId !== id || duplicate.stockBefore !== expectedStock || duplicate.stockAfter !== stock) throw { status: 409, message: "La clave de operación ya se utilizó para otro ajuste." };
+        return { productId: id, stock: balance.stock, duplicated: true };
+      }
+      if (balance.stock !== expectedStock) throw { status: 409, message: "El stock cambió en otra sesión. Actualizá y revisá la cantidad antes de guardar." };
+      const difference = stock - balance.stock;
+      if (!difference) return { productId: id, stock, unchanged: true };
+      const result = await adjustInventoryInTransaction(tx, {
+        businessUnitId: unit.id, productId: id, direction: difference > 0 ? "IN" : "OUT", quantity: Math.abs(difference),
+        movementType: "WAREHOUSE_STOCK_ADJUSTMENT", unitCost: balance.cost, sourceType: "warehouse_stock_adjustment", sourceId: id,
+        idempotencyKey: key, userId, notes: "Ajuste de cantidad de stock del Galpón",
+      });
+      return { productId: id, stock: result.movement.stockAfter, duplicated: false };
+    });
+  },
   async operations(unit, previewItems = null) {
     assertWarehouse(unit);
     return runWarehouseTransaction(async (tx) => {

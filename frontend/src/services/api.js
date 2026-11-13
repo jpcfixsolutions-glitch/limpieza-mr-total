@@ -16,7 +16,9 @@ api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token");
   // Faltaban las comillas invertidas (backticks) en tu código original para que funcione la interpolación
   if (token) config.headers.Authorization = `Bearer ${token}`; 
-  const businessUnit = localStorage.getItem("businessUnit") || "LOCAL";
+  let role;
+  try { role = JSON.parse(localStorage.getItem("user") || "null")?.role; } catch { /* La autenticación resolverá una sesión inválida. */ }
+  const businessUnit = role === "EMPLEADO_GALPON" ? "WAREHOUSE" : localStorage.getItem("businessUnit") || "LOCAL";
   config.headers["X-Business-Unit"] = businessUnit;
   return config;
 });

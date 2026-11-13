@@ -18,8 +18,15 @@ export function calculateWarehouseProduction(orders, inventory) {
       const row = demand.get(key) || {
         productId: item.productId, productName: stock.get(item.productId)?.name || item.productName,
         demand: 0, stock: Number(stock.get(item.productId)?.stock || 0),
+        orders: [], oldestOrderAt: null,
       };
       row.demand += item.quantity;
+      if (item.quantity > assigned) {
+        const source = row.orders.find((source) => source.id === order.id);
+        if (source) source.toProduce += item.quantity - assigned;
+        else row.orders.push({ id: order.id, createdAt: order.createdAt, toProduce: item.quantity - assigned });
+        if (!row.oldestOrderAt) row.oldestOrderAt = order.createdAt;
+      }
       demand.set(key, row);
       allocations[order.id].push({ ...item, availableStock: Number(stock.get(item.productId)?.stock || 0), assignedStock: assigned, toProduce: item.quantity - assigned });
     }

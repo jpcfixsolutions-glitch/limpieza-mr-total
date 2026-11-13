@@ -4,7 +4,9 @@ import { PackageCheck, PackageOpen, RefreshCw, Truck } from "lucide-react";
 import api from "../../services/api.js";
 import { useWarehouseOperations } from "../hooks/useWarehouseOperations.js";
 import { WarehouseProductionCard } from "./WarehouseProductionCard.jsx";
+import { useWarehouseWelcome } from "./WarehouseWelcome.jsx";
 export { WarehouseOrdersView } from "./WarehouseOrdersView.jsx";
+export { WarehouseStatsView } from "./WarehouseActivityView.jsx";
 
 function Page({ title, subtitle, actions, children }) {
   return (
@@ -25,37 +27,11 @@ const card = "bg-surface border border-foreground/10 rounded-2xl p-5 shadow-sm";
 const input = "bg-background border border-foreground/15 rounded-xl px-3 py-2 outline-none focus:border-primary";
 const button = "bg-primary text-white font-bold rounded-xl px-4 py-2 disabled:opacity-50";
 
-function StatCards({ stats }) {
-  const values = [
-    ["Stock total", `${stats.stockUnits || 0} u.`], ["Valor inventario", money(stats.inventoryValue)],
-    ["Pedidos despachados", stats.dispatchedOrders || 0], ["Ventas mayoristas", money(stats.dispatchedSales)],
-    ["Compras recibidas", stats.receivedPurchases || 0], ["Bajo mínimo", stats.lowStockProducts || 0],
-  ];
-  return <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">{values.map(([label, value]) => <div key={label} className={card}><p className="text-sm text-foreground/60 font-bold">{label}</p><p className="text-2xl font-black mt-2">{value}</p></div>)}</div>;
-}
-
-const warehouseDateFormat = new Intl.DateTimeFormat("es-AR", {
-  timeZone: "America/Argentina/Cordoba", weekday: "long", day: "numeric", month: "long", year: "numeric",
-});
-const warehouseTimeFormat = new Intl.DateTimeFormat("es-AR", {
-  timeZone: "America/Argentina/Cordoba", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-});
 
 export function WarehouseHomeView({ user }) {
-  // La aplicación usa createRoot (renderizado cliente), sin hidratación SSR.
-  const [now, setNow] = useState(() => new Date());
+  const welcome = useWarehouseWelcome(user);
   const { data, loading, error, refresh } = useWarehouseOperations();
   const summary = data?.counts;
-
-  useEffect(() => {
-    const interval = window.setInterval(() => setNow(new Date()), 60_000);
-    return () => window.clearInterval(interval);
-  }, []);
-
-  const hour = Number(warehouseTimeFormat.formatToParts(now).find((part) => part.type === "hour").value);
-  const greeting = hour >= 5 && hour < 12 ? "Buenos días" : hour >= 12 && hour < 20 ? "Buenas tardes" : "Buenas noches";
-  const name = user?.name?.trim();
-  const date = warehouseDateFormat.format(now);
 
   const metrics = [
     { key: "pending", title: "Pedidos pendientes", icon: PackageOpen, empty: "Sin pedidos pendientes", description: "En preparación o pendientes de producción." },
@@ -64,9 +40,9 @@ export function WarehouseHomeView({ user }) {
   ];
 
   return (
-    <Page title={<span className="block text-2xl sm:text-3xl [overflow-wrap:anywhere]">¡{greeting}{name ? `, ${name}` : ""}!</span>}
-      subtitle={<time dateTime={now.toISOString()} className="text-sm sm:text-base">
-        {date.charAt(0).toUpperCase() + date.slice(1)} · {warehouseTimeFormat.format(now)} hs
+    <Page title={<span className="block text-2xl sm:text-3xl [overflow-wrap:anywhere]">{welcome.title}</span>}
+      subtitle={<time dateTime={welcome.dateTime} className="text-sm sm:text-base">
+        {welcome.dateText}
       </time>} actions={
       <button type="button" onClick={refresh} disabled={loading}
         className="flex items-center gap-2 text-sm font-bold rounded-xl border border-foreground/15 bg-surface px-4 py-2 hover:bg-background disabled:opacity-50">
@@ -176,10 +152,4 @@ export function WarehouseMovementsView() {
   const [rows, setRows] = useState([]);
   useEffect(() => { api.get("/inventory/movements").then((r) => setRows(r.data)).catch(() => toast.error("No se pudieron cargar los movimientos.")); }, []);
   return <Page title="Movimientos" subtitle="Libro de inventario auditable; las correcciones aparecen como reversiones."><div className={`${card} overflow-x-auto`}><table className="w-full text-sm"><thead><tr className="text-left"><th>Fecha</th><th>Producto</th><th>Tipo</th><th>Cantidad</th><th>Stock</th></tr></thead><tbody>{rows.map((r) => <tr key={r.id} className="border-t border-foreground/10"><td className="py-3">{r.createdAt}</td><td className="font-bold">{r.productName}</td><td>{r.movementType}</td><td className={r.direction === "IN" ? "text-green-600" : "text-orange-600"}>{r.direction === "IN" ? "+" : "-"}{r.quantity}</td><td>{r.stockBefore} → {r.stockAfter}</td></tr>)}</tbody></table></div></Page>;
-}
-
-export function WarehouseStatsView() {
-  const [stats, setStats] = useState({});
-  useEffect(() => { api.get("/warehouse/stats").then((r) => setStats(r.data)).catch(() => toast.error("No se pudieron cargar las estadísticas.")); }, []);
-  return <Page title="Estadísticas" subtitle="Indicadores calculados sólo con documentos e inventario del Galpón."><StatCards stats={stats} /><div className={`${card} mt-5`}><p className="font-black">Compras recibidas</p><p className="text-2xl mt-2">{money(stats.purchaseTotal)}</p></div></Page>;
 }

@@ -15,8 +15,10 @@ import { Loader } from "./components/Loader.jsx";
 import { SubscriptionProvider } from "./modules/subscription/SubscriptionContext.jsx";
 import { SubscriptionOverlay } from "./modules/subscription/SubscriptionOverlay.jsx";
 import { BusinessUnitSelection } from "./components/BusinessUnitSelection.jsx";
-import { WarehouseHomeView, WarehouseOrdersView, WarehouseStockView, WarehousePurchasesView, WarehouseCustomersView, WarehouseMovementsView, WarehouseStatsView } from "./components/WarehouseViews.jsx";
+import { WarehouseHomeView, WarehouseOrdersView, WarehouseStockView, WarehouseCustomersView } from "./components/WarehouseViews.jsx";
+import { WarehouseStatsView } from "./components/WarehouseActivityView.jsx";
 import api from "../services/api.js";
+import { WarehouseEmployeeStockView } from "./components/WarehouseEmployeeStockView.jsx";
 
 const toastOptions = {
   duration: 2000,
@@ -28,7 +30,7 @@ const toastOptions = {
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState("ventas");
+  const [activeView, setActiveView] = useState(() => JSON.parse(localStorage.getItem("user") || "null")?.role === "EMPLEADO_GALPON" ? "warehouse-home" : "ventas");
   const [user, setUser] = useState(() => {
     const stored = localStorage.getItem("user");
     return stored ? JSON.parse(stored) : null;
@@ -37,6 +39,7 @@ export default function App() {
     const storedUser = localStorage.getItem("user");
     if (!storedUser) return null;
     const parsed = JSON.parse(storedUser);
+    if (parsed.role === "EMPLEADO_GALPON") return "WAREHOUSE";
     if (parsed.role === "admin") return localStorage.getItem("businessUnit") || null;
     return "LOCAL";
   });
@@ -47,10 +50,11 @@ export default function App() {
 
   // Transacciones de la caja actual (en memoria para velocidad, se persisten en el backend)
   const [transactions, setTransactions] = useState([]);
+  const isEmployee = user?.role === "EMPLEADO_GALPON";
 
   useEffect(() => {
     document.title = "Mr.Total";
-    if (user && businessUnit === "LOCAL") {
+    if (user && !isEmployee && businessUnit === "LOCAL") {
       fetchCajaStatus(true);
     } else if (businessUnit === "WAREHOUSE") {
       setCajaStatus({ isOpen: false, register: null });
@@ -161,7 +165,11 @@ export default function App() {
 
   function handleLogin(loggedUser) {
     setUser(loggedUser);
-    if (loggedUser.role === "creador") {
+    if (loggedUser.role === "EMPLEADO_GALPON") {
+      localStorage.setItem("businessUnit", "WAREHOUSE");
+      setBusinessUnit("WAREHOUSE");
+      setActiveView("warehouse-home");
+    } else if (loggedUser.role === "creador") {
       setActiveView("creador");
     } else if (loggedUser.role === "admin") {
       localStorage.removeItem("businessUnit");
@@ -175,6 +183,7 @@ export default function App() {
   }
 
   function handleBusinessUnitChange(code) {
+    if (user.role === "EMPLEADO_GALPON") return;
     if (user.role !== "admin" && code !== "LOCAL") return;
     localStorage.setItem("businessUnit", code);
     setBusinessUnit(code);
@@ -208,25 +217,23 @@ export default function App() {
   }
 
   return (
-    <SubscriptionProvider>
+    <SubscriptionProvider userRole={user.role}>
       <div key={businessUnit} className="size-full flex bg-background text-foreground relative overflow-x-hidden min-h-screen">
         {appLoading && <Loader fullScreen />}
         <Sidebar
           activeView={activeView}
-          onViewChange={setActiveView}
+          onViewChange={(view) => { if (!isEmployee || ["warehouse-home", "warehouse-orders", "warehouse-stock"].includes(view)) setActiveView(view); }}
           role={user.role}
           onLogout={handleLogout}
           businessUnit={businessUnit}
           onBusinessUnitChange={handleBusinessUnitChange}
         />
 
-        {businessUnit === "WAREHOUSE" && activeView === "warehouse-home" && <WarehouseHomeView user={user} />}
-        {businessUnit === "WAREHOUSE" && activeView === "warehouse-orders" && <WarehouseOrdersView />}
-        {businessUnit === "WAREHOUSE" && activeView === "warehouse-stock" && <WarehouseStockView />}
-        {businessUnit === "WAREHOUSE" && activeView === "warehouse-purchases" && <WarehousePurchasesView />}
-        {businessUnit === "WAREHOUSE" && activeView === "warehouse-customers" && <WarehouseCustomersView />}
-        {businessUnit === "WAREHOUSE" && activeView === "warehouse-movements" && <WarehouseMovementsView />}
-        {businessUnit === "WAREHOUSE" && activeView === "warehouse-stats" && <WarehouseStatsView />}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-home" && (isEmployee ? <WarehouseOrdersView user={user} employeeHome /> : <WarehouseHomeView user={user} />)}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-orders" && <WarehouseOrdersView user={user} />}
+        {businessUnit === "WAREHOUSE" && activeView === "warehouse-stock" && (isEmployee ? <WarehouseEmployeeStockView /> : <WarehouseStockView />)}
+        {businessUnit === "WAREHOUSE" && user.role === "admin" && activeView === "warehouse-customers" && <WarehouseCustomersView />}
+        {businessUnit === "WAREHOUSE" && user.role === "admin" && activeView === "warehouse-stats" && <WarehouseStatsView />}
 
         {businessUnit === "LOCAL" && activeView === "creador" && user.role === "creador" && <CreadorView />}
 
