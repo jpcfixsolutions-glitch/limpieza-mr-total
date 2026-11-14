@@ -487,3 +487,34 @@ export const subscriptionConfig = sqliteTable("subscription_config", {
   lastPaidAt: text("last_paid_at"),   // fecha de última reactivación "YYYY-MM-DD"
   updatedAt: text("updated_at").default(sql`(datetime('now','localtime'))`),
 });
+
+// Configuración financiera exclusiva del Galpón. Las ocurrencias conservan su snapshot.
+export const warehouseFixedExpenses = sqliteTable('warehouse_fixed_expenses', {
+  id: integer('id').primaryKey({autoIncrement:true}),
+  businessUnitId: integer('business_unit_id').notNull().references(()=>businessUnits.id),
+  name:text('name').notNull(), nameKey:text('name_key').notNull(), description:text('description').notNull().default(''),
+  amountCents:integer('amount_cents').notNull(), frequency:text('frequency').notNull(), dueDay:integer('due_day').notNull(),
+  startDate:text('start_date').notNull(),nextDue:text('next_due').notNull(),active:integer('active').notNull().default(1),version:integer('version').notNull().default(0),
+},t=>[uniqueIndex('warehouse_fixed_name').on(t.businessUnitId,t.nameKey)]);
+export const warehouseFixedOccurrences = sqliteTable('warehouse_fixed_occurrences', {
+  id:integer('id').primaryKey({autoIncrement:true}),businessUnitId:integer('business_unit_id').notNull().references(()=>businessUnits.id),
+  fixedExpenseId:integer('fixed_expense_id').notNull().references(()=>warehouseFixedExpenses.id),dueDate:text('due_date').notNull(),
+  concept:text('concept').notNull(),description:text('description').notNull(),amountCents:integer('amount_cents').notNull(),
+  expenseId:integer('expense_id').unique().references(()=>warehouseExpenses.id),
+},t=>[uniqueIndex('warehouse_fixed_due').on(t.fixedExpenseId,t.dueDate)]);
+export const warehousePaymentMethods = sqliteTable('warehouse_payment_methods', {
+  id:integer('id').primaryKey({autoIncrement:true}),businessUnitId:integer('business_unit_id').notNull().references(()=>businessUnits.id),
+  name:text('name').notNull(),nameKey:text('name_key').notNull(),surchargeBps:integer('surcharge_bps').notNull(),kind:text('kind').notNull(),
+  active:integer('active').notNull().default(1),version:integer('version').notNull().default(0),
+},t=>[uniqueIndex('warehouse_method_name').on(t.businessUnitId,t.nameKey)]);
+export const warehousePaymentParts = sqliteTable('warehouse_payment_parts', {
+  id:integer('id').primaryKey({autoIncrement:true}),receiptId:integer('receipt_id').references(()=>warehouseReceipts.id),
+  accountMovementId:integer('account_movement_id').references(()=>accountMovements.id),methodId:integer('method_id').notNull().references(()=>warehousePaymentMethods.id),
+  methodName:text('method_name').notNull(),kind:text('kind').notNull(),baseCents:integer('base_cents').notNull(),
+  surchargeBps:integer('surcharge_bps').notNull(),surchargeCents:integer('surcharge_cents').notNull(),
+});
+export const warehouseSettingsAudit = sqliteTable('warehouse_settings_audit', {
+  id:integer('id').primaryKey({autoIncrement:true}),businessUnitId:integer('business_unit_id').notNull().references(()=>businessUnits.id),
+  entity:text('entity').notNull(),entityId:integer('entity_id').notNull(),snapshot:text('snapshot').notNull(),
+  userId:integer('user_id').references(()=>users.id),createdAt:text('created_at').notNull(),
+});

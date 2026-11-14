@@ -36,6 +36,7 @@ export const CustomerController = {
 
   async registerPayment(req, res) {
     try {
+      if (req.businessUnit?.code === 'WAREHOUSE' && req.user.role !== 'admin') return res.status(403).json({message:'Operación exclusiva de administradores.'});
       const result = await CustomerService.registerPayment(
         req.params.id,
         req.body,

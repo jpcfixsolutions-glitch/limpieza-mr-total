@@ -34,6 +34,14 @@ before(async () => {
   const { warehouseFinanceMigration } = await import("../db/warehouseFinanceMigration.js");
   await client.batch(warehouseFinanceMigration.statements, "write");
   await client.batch(warehouseFinanceMigration.statements, "write");
+  await client.batch([
+    'ALTER TABLE account_movements ADD COLUMN detail TEXT',
+    'ALTER TABLE account_movements ADD COLUMN user_id INTEGER',
+    'ALTER TABLE account_movements ADD COLUMN idempotency_key TEXT',
+    'CREATE UNIQUE INDEX test_account_key ON account_movements(business_unit_id,idempotency_key)',
+  ],'write');
+  const { warehouseSettingsMigration } = await import('../db/warehouseSettingsMigration.js');
+  await client.batch(warehouseSettingsMigration.statements,'write');
 });
 after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
@@ -157,4 +165,125 @@ test("Todo incluye eventos de distintos meses y años sin cambiar los cálculos 
   assert.equal(all.statuses.reduce((sum, state) => sum + state.count, 0), 4);
   assert.equal(all.expenses.length, 2);
   assert.deepEqual(all.days.map((day) => day.day), ["2027-01-01", "2026-12-31", "2026-11-14", "2026-11-13", "2026-11-12"]);
+});
+
+test('Configuración: calendario mensual y semanal, validaciones y nombres normalizados', async()=>{
+  const { nextDue, WarehouseSettingsService: settings } = await import('./warehouseSettings.service.js');
+  assert.equal(nextDue('2026-02-01','month',31),'2026-02-28');
+  assert.equal(nextDue('2028-02-01','month',31),'2028-02-29');
+  assert.equal(nextDue('2026-02-28','month',31,true),'2026-03-31');
+  assert.equal(nextDue('2026-12-31','week',1),'2027-01-04');
+  const method = await settings.save(unit,'method',{name:'Tarjeta crédito',surcharge:10,kind:'other'},1);
+  assert.equal(method.surcharge_bps,1000);
+  await assert.rejects(()=>settings.save(unit,'method',{name:'  TARJETA   CREDITO ',surcharge:0,kind:'other'},1),e=>e.status===409);
+  for(const surcharge of ['abc',NaN,Infinity,-1,100.01,null,'',0.001]) await assert.rejects(()=>settings.save(unit,'method',{name:'Inválido',surcharge,kind:'other'},1),e=>e.status===400);
+  await assert.rejects(()=>settings.get({id:1,code:'LOCAL'}),e=>e.status===403);
+  const result=await settings.get(unit);
+  assert.ok(result.methods.every(m=>m.business_unit_id===unit.id));
+});
+
+test('Configuración: recuperación idempotente, snapshots y pago único de gastos fijos',async()=>{
+  const { WarehouseSettingsService: settings, materializeFixed, nextDue } = await import('./warehouseSettings.service.js');
+  const { runWarehouseTransaction } = await import('./warehouse.service.js');
+  const { getArgentinaTime }=await import('../db/timeUtils.js');
+  const today=getArgentinaTime().datetime.slice(0,10);
+  const date=new Date(today+'T12:00:00Z');date.setUTCDate(date.getUTCDate()-14);
+  const start=date.toISOString().slice(0,10), day=date.getUTCDay()||7;
+  const data={name:'Alquiler fijo prueba',amount:25.15,frequency:'week',dueDay:day,startDate:start,active:true};
+  const fixed=await settings.save(unit,'expense',data,1);
+  const getOccurrences=async()=> (await client.execute({sql:'SELECT * FROM warehouse_fixed_occurrences WHERE fixed_expense_id=? ORDER BY due_date',args:[fixed.id]})).rows;
+  const initial=await getOccurrences();assert.equal(initial.length,3);
+  assert.ok(initial.every(e=>e.amount_cents===2515));
+  await Promise.all([settings.get(unit),settings.get(unit),service.stats(unit,{period:'all'})]);
+  assert.equal((await getOccurrences()).length,3);
+  const statsBefore=await service.stats(unit,{period:'all'});
+  assert.ok(statsBefore.pendingExpenses.some(e=>e.id===initial[0].id));
+  assert.ok((await service.day(unit,start)).pendingExpenses.some(e=>e.id===initial[0].id));
+  const changed=await settings.save(unit,'expense',{...data,amount:40,expectedVersion:fixed.version},1,fixed.id);
+  assert.equal(changed.version,1);
+  assert.ok((await getOccurrences()).every(e=>e.amount_cents===2515));
+  const future=nextDue(today,'week',day,true);
+  await runWarehouseTransaction(tx=>materializeFixed(tx,unit.id,future));
+  const later=await getOccurrences();assert.equal(later.at(-1).amount_cents,4000);
+  const beforePay=await service.stats(unit,{date:today});
+  const paid=await settings.settle(unit,initial[0].id,{method:'cash',date:today},1);
+  assert.equal((await settings.settle(unit,initial[0].id,{method:'cash',date:today},1)).id,paid.id);
+  const afterPay=await service.stats(unit,{date:today});
+  assert.equal(afterPay.summary.expenseCents-beforePay.summary.expenseCents,2515);
+  assert.ok(afterPay.expenses.some(e=>e.id===paid.id&&e.fixed_due_date===start));
+  for(const period of ['day','week','month','all']){
+    const report=await service.stats(unit,{period,date:today});
+    assert.equal(report.summary.netCents,report.days.reduce((s,d)=>s+d.netCents,0));
+    assert.equal(report.summary.expenseCents,report.expenses.reduce((s,e)=>s+e.amount_cents,0));
+  }
+  await assert.rejects(()=>service.expense(unit,{expectedVersion:paid.version},1,paid.id,true),e=>e.status===409);
+  await settings.save(unit,'expense',{...data,amount:40,active:false,expectedVersion:changed.version},1,fixed.id);
+  await runWarehouseTransaction(tx=>materializeFixed(tx,unit.id,'2030-12-31'));
+  assert.equal((await getOccurrences()).length,later.length);
+  await assert.rejects(()=>settings.save(unit,'expense',data,1),e=>e.status===409);
+  await assert.rejects(()=>settings.save(unit,'expense',{...data,expectedVersion:0},1,fixed.id),e=>e.status===409);
+  assert.equal((await client.execute('SELECT count(*) n FROM warehouse_expenses WHERE business_unit_id=1')).rows[0].n,0);
+});
+
+test('Recargos por tramo, historial, redondeo y devolución íntegra',async()=>{
+  const { WarehouseSettingsService: settings }=await import('./warehouseSettings.service.js');
+  await client.execute("INSERT INTO warehouse_orders VALUES(100,2,2,'confirmed',100000,0,'2026-11-13 08:00:00',NULL,NULL)");
+  const methods=(await settings.get(unit)).methods;
+  const card=methods.find(m=>m.name==='Tarjeta crédito'),cash=methods.find(m=>m.name==='Efectivo');
+  const payload={payments:[{paymentMethodId:cash.id,amount:40000},{paymentMethodId:card.id,amount:60000,expectedSurchargeBps:1000}],occurredAt:'2026-11-13',idempotencyKey:'combined-surcharge'};
+  const before=await service.stats(unit,{date:'2026-11-13'});
+  const receipt=await service.receipt(unit,100,payload,1);
+  assert.equal(receipt.payments.reduce((s,p)=>s+p.surcharge_cents,0),600000);
+  assert.equal((await service.stats(unit,{date:'2026-11-13'})).summary.incomeCents-before.summary.incomeCents,10600000);
+  assert.equal((await service.day(unit,'2026-11-13')).orders.find(o=>o.id===100).paidCents,10000000);
+  assert.equal((await service.receipt(unit,100,payload,1)).id,receipt.id);
+  await settings.save(unit,'method',{name:card.name,surcharge:20,kind:'other',active:false,expectedVersion:card.version},1,card.id);
+  assert.equal((await client.execute({sql:'SELECT surcharge_bps FROM warehouse_payment_parts WHERE receipt_id=? AND method_id=?',args:[receipt.id,card.id]})).rows[0].surcharge_bps,1000);
+  const refund=await service.receipt(unit,100,{reversalOfId:receipt.id,reason:'Prueba devolución',occurredAt:'2026-11-14',idempotencyKey:'refund-surcharge'},1);
+  assert.equal(refund.payments.reduce((s,p)=>s+p.base_cents+p.surcharge_cents,0),-10600000);
+  await assert.rejects(()=>service.receipt(unit,100,{...payload,idempotencyKey:'inactive-card'},1),e=>e.status===400);
+  const half=await settings.save(unit,'method',{name:'Redondeo',surcharge:50,kind:'other'},1);
+  const rounded=await service.receipt(unit,100,{payments:[{paymentMethodId:half.id,amount:0.01}],idempotencyKey:'round-half-cent'},1);
+  assert.equal(rounded.payments[0].surcharge_cents,1);
+  await assert.rejects(()=>service.receipt(unit,100,{payments:[{paymentMethodId:half.id,amount:1,expectedSurchargeBps:1000}],idempotencyKey:'stale-rate'},1),e=>e.status===409);
+});
+
+test('Cuentas del Galpón: capital cancela deuda, recargo ingresa una vez y se conserva por medio',async()=>{
+  const { CustomerService }=await import('./customer.service.js');
+  const { WarehouseSettingsService: settings }=await import('./warehouseSettings.service.js');
+  const { getArgentinaTime }=await import('../db/timeUtils.js');
+  const today=getArgentinaTime().datetime.slice(0,10);
+  const card=await settings.save(unit,'method',{name:'Tarjeta cuenta',surcharge:10,kind:'other'},1);
+  const cash=(await settings.get(unit)).methods.find(m=>m.kind==='cash');
+  await client.execute("INSERT INTO account_movements(id,business_unit_id,customer_id,type,amount,created_at) VALUES(100,2,2,'cargo',100000,'2026-11-13 09:00:00')");
+  const before=await service.stats(unit,{date:today});
+  const data={payments:[{paymentMethodId:cash.id,amount:40000},{paymentMethodId:card.id,amount:60000}],idempotencyKey:'account-surcharge'};
+  const payment=await CustomerService.registerPayment(2,data,1,unit);
+  assert.equal(payment.amount,100000);
+  assert.equal(payment.payments.reduce((s,p)=>s+p.base_cents+p.surcharge_cents,0),10600000);
+  assert.equal((await service.stats(unit,{date:today})).summary.incomeCents-before.summary.incomeCents,10600000);
+  assert.equal((await CustomerService.registerPayment(2,data,1,unit)).id,payment.id);
+  await settings.save(unit,'method',{name:card.name,surcharge:90,kind:'transfer',active:false,expectedVersion:card.version},1,card.id);
+  assert.equal((await service.stats(unit,{date:today})).summary.otherCents-before.summary.otherCents,6600000);
+  const detail=await service.day(unit,today);
+  assert.equal(detail.accountPayments.find(p=>p.id===payment.id).snapshots.find(p=>p.method_id===card.id).surcharge_bps,1000);
+  await assert.rejects(()=>CustomerService.registerPayment(1,data,1,unit),e=>e.status===404);
+});
+
+test('Configuración: endpoints protegidos y auditoría',async()=>{
+  const { default: routes }=await import('../routes/warehouse.routes.js');
+  const app=express();app.use(express.json());app.use('/warehouse',routes);
+  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+  const root=`http://127.0.0.1:${server.address().port}/warehouse`;
+  const headers={Authorization:`Bearer ${jwt.sign({id:1,role:'admin'},process.env.JWT_SECRET)}`,'X-Business-Unit':'WAREHOUSE','Content-Type':'application/json'};
+  try{
+    for(const [url,method] of [['/settings','GET'],['/settings/expense','POST'],['/settings/method/1','PUT'],['/fixed-occurrences/1/pay','POST']]){
+      const request={method,headers,...(method!=='GET'?{body:'{}'}:{})};
+      assert.equal((await fetch(root+url,{...request,headers:{}})).status,401);
+      assert.equal((await fetch(root+url,{...request,headers:{...headers,Authorization:`Bearer ${jwt.sign({id:2,role:'EMPLEADO_GALPON'},process.env.JWT_SECRET)}`}})).status,403);
+      assert.equal((await fetch(root+url,{...request,headers:{...headers,'X-Business-Unit':'LOCAL'}})).status,403);
+    }
+    assert.equal((await fetch(root+'/settings',{headers})).status,200);
+    assert.ok((await client.execute('SELECT count(*) n FROM warehouse_settings_audit')).rows[0].n>0);
+  }finally{await new Promise(r=>server.close(r));}
 });

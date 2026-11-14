@@ -1,3 +1,4 @@
+import { materializeFixed, paymentParts, storeParts } from "./warehouseSettings.service.js";
 import { sql } from "drizzle-orm";
 import { getArgentinaTime } from "../db/timeUtils.js";
 import { runWarehouseTransaction } from "./warehouse.service.js";
@@ -52,14 +53,17 @@ function ledger(unitId, start, end) {
       0 cashCents, 0 transferCents, 0 otherCents, 0 expenseCents
     FROM warehouse_orders WHERE business_unit_id=${unitId} AND ${dateFilter("created_at", start, end)}
     UNION ALL
-    SELECT substr(occurred_at,1,10),0,0,cash_cents,transfer_cents,0,0
-    FROM warehouse_receipts WHERE business_unit_id=${unitId} AND ${dateFilter("occurred_at", start, end)}
+    SELECT substr(occurred_at,1,10),0,0,
+      COALESCE((SELECT sum(base_cents+surcharge_cents) FROM warehouse_payment_parts p WHERE p.receipt_id=r.id AND p.kind='cash'),CASE WHEN NOT EXISTS(SELECT 1 FROM warehouse_payment_parts p WHERE p.receipt_id=r.id) THEN cash_cents ELSE 0 END),
+      COALESCE((SELECT sum(base_cents+surcharge_cents) FROM warehouse_payment_parts p WHERE p.receipt_id=r.id AND p.kind='transfer'),CASE WHEN NOT EXISTS(SELECT 1 FROM warehouse_payment_parts p WHERE p.receipt_id=r.id) THEN transfer_cents ELSE 0 END),
+      COALESCE((SELECT sum(base_cents+surcharge_cents) FROM warehouse_payment_parts p WHERE p.receipt_id=r.id AND p.kind='other'),0),0
+    FROM warehouse_receipts r WHERE business_unit_id=${unitId} AND ${dateFilter("occurred_at", start, end)}
     UNION ALL
     SELECT substr(m.created_at,1,10),0,0,
-      CASE WHEN lower(COALESCE(d.method_name,m.method_name,''))='efectivo' THEN CAST(round(COALESCE(d.amount,m.amount)*100) AS INTEGER) ELSE 0 END,
-      CASE WHEN lower(COALESCE(d.method_name,m.method_name,''))='transferencia' THEN CAST(round(COALESCE(d.amount,m.amount)*100) AS INTEGER) ELSE 0 END,
-      CASE WHEN lower(COALESCE(d.method_name,m.method_name,'')) NOT IN ('efectivo','transferencia') THEN CAST(round(COALESCE(d.amount,m.amount)*100) AS INTEGER) ELSE 0 END,0
-    FROM account_movements m LEFT JOIN account_payment_details d ON d.account_movement_id=m.id
+      CASE WHEN COALESCE(p.kind,CASE lower(COALESCE(d.method_name,m.method_name,'')) WHEN 'efectivo' THEN 'cash' WHEN 'transferencia' THEN 'transfer' ELSE 'other' END)='cash' THEN COALESCE(p.base_cents+p.surcharge_cents,CAST(round(COALESCE(d.amount,m.amount)*100) AS INTEGER)) ELSE 0 END,
+      CASE WHEN COALESCE(p.kind,CASE lower(COALESCE(d.method_name,m.method_name,'')) WHEN 'efectivo' THEN 'cash' WHEN 'transferencia' THEN 'transfer' ELSE 'other' END)='transfer' THEN COALESCE(p.base_cents+p.surcharge_cents,CAST(round(COALESCE(d.amount,m.amount)*100) AS INTEGER)) ELSE 0 END,
+      CASE WHEN COALESCE(p.kind,CASE lower(COALESCE(d.method_name,m.method_name,'')) WHEN 'efectivo' THEN 'cash' WHEN 'transferencia' THEN 'transfer' ELSE 'other' END)='other' THEN COALESCE(p.base_cents+p.surcharge_cents,CAST(round(COALESCE(d.amount,m.amount)*100) AS INTEGER)) ELSE 0 END,0
+    FROM account_movements m LEFT JOIN warehouse_payment_parts p ON p.account_movement_id=m.id LEFT JOIN account_payment_details d ON d.account_movement_id=m.id AND p.id IS NULL
     WHERE m.business_unit_id=${unitId} AND m.type='pago' AND ${dateFilter("m.created_at", start, end)}
     UNION ALL
     SELECT substr(occurred_at,1,10),0,0,0,0,0,amount_cents FROM warehouse_expenses
@@ -78,20 +82,28 @@ export const WarehouseActivityService = {
     assertUnit(unit);
     const range = activityPeriod(query.period, query.date);
     return runWarehouseTransaction(async (tx) => {
+      await materializeFixed(tx,unit.id);
       const days = (await rows(tx, ledger(unit.id, range.start, range.end))).map(summarize);
       const total = { orders: 0, orderCents: 0, cashCents: 0, transferCents: 0, otherCents: 0, expenseCents: 0 };
       for (const day of days) for (const field of Object.keys(total)) total[field] += Number(day[field]);
       const statuses = await rows(tx, sql`SELECT CASE WHEN delivered_at IS NOT NULL THEN 'delivered' WHEN ready_at IS NOT NULL AND status IN ('confirmed','preparing') THEN 'ready' ELSE status END status,
         count(*) count FROM warehouse_orders WHERE business_unit_id=${unit.id} AND ${dateFilter("created_at", range.start, range.end)} GROUP BY 1`);
-      const expenses = await rows(tx, sql`SELECT * FROM warehouse_expenses WHERE business_unit_id=${unit.id} AND deleted_at IS NULL
+      const expenses = await rows(tx, sql`SELECT e.*, (SELECT due_date FROM warehouse_fixed_occurrences f WHERE f.expense_id=e.id) fixed_due_date FROM warehouse_expenses e WHERE business_unit_id=${unit.id} AND deleted_at IS NULL
         AND ${dateFilter("occurred_at", range.start, range.end)} ORDER BY occurred_at DESC,id DESC`);
-      return { ...range, summary: summarize(total), statuses, days, expenses };
+      const pendingExpenses = await rows(tx, sql`SELECT * FROM warehouse_fixed_occurrences WHERE business_unit_id=${unit.id} AND expense_id IS NULL ORDER BY due_date,id`);
+      const dueDates = await rows(tx,sql`SELECT DISTINCT due_date FROM warehouse_fixed_occurrences WHERE business_unit_id=${unit.id} AND ${dateFilter('due_date',range.start,range.end)}`);
+      for (const expense of dueDates) {
+        if ((range.start===null || (expense.due_date>=range.start && expense.due_date<range.end)) && !days.some(d=>d.day===expense.due_date)) days.push(summarize({...total,orders:0,orderCents:0,cashCents:0,transferCents:0,otherCents:0,expenseCents:0,day:expense.due_date}));
+      }
+      days.sort((a,b)=>b.day.localeCompare(a.day));
+      return { pendingExpenses, ...range, summary: summarize(total), statuses, days, expenses };
     });
   },
   async day(unit, date) {
     assertUnit(unit);
     const range = activityPeriod("day", date);
     return runWarehouseTransaction(async (tx) => {
+      await materializeFixed(tx,unit.id);
       const orders = await rows(tx, sql`SELECT o.*, c.name customerName, c.last_name customerLastName,
         (SELECT COALESCE(sum(cash_cents+transfer_cents),0) FROM warehouse_receipts WHERE order_id=o.id) paidCents
         FROM warehouse_orders o LEFT JOIN customers c ON c.id=o.customer_id AND c.business_unit_id=o.business_unit_id
@@ -106,10 +118,14 @@ export const WarehouseActivityService = {
         AND m.created_at>=${range.start} AND m.created_at<${range.end} ORDER BY m.created_at DESC,m.id DESC`);
       const parts = await rows(tx, sql`SELECT d.* FROM account_payment_details d JOIN account_movements m ON m.id=d.account_movement_id
         WHERE m.business_unit_id=${unit.id} AND m.type='pago' AND m.created_at>=${range.start} AND m.created_at<${range.end}`);
-      const expenses = await rows(tx, sql`SELECT * FROM warehouse_expenses WHERE business_unit_id=${unit.id} AND deleted_at IS NULL
+      const expenses = await rows(tx, sql`SELECT e.*, (SELECT due_date FROM warehouse_fixed_occurrences f WHERE f.expense_id=e.id) fixed_due_date FROM warehouse_expenses e WHERE business_unit_id=${unit.id} AND deleted_at IS NULL
         AND occurred_at>=${range.start} AND occurred_at<${range.end} ORDER BY occurred_at DESC,id DESC`);
-      return { date, orders: orders.map((o) => ({ ...o, items: items.filter((i) => i.order_id === o.id) })), receipts,
-        accountPayments: accountPayments.map((p) => ({ ...p, payments: parts.filter((d) => d.account_movement_id === p.id) })), expenses };
+      const accountSnapshots = await rows(tx,sql`SELECT p.* FROM warehouse_payment_parts p JOIN account_movements m ON m.id=p.account_movement_id WHERE m.business_unit_id=${unit.id} AND m.created_at>=${range.start} AND m.created_at<${range.end}`);
+      const paymentDetails = await rows(tx, sql`SELECT p.* FROM warehouse_payment_parts p JOIN warehouse_receipts r ON r.id=p.receipt_id WHERE r.business_unit_id=${unit.id} AND r.occurred_at>=${range.start} AND r.occurred_at<${range.end}`);
+      const fixedOccurrences = await rows(tx,sql`SELECT f.*,e.occurred_at paid_at FROM warehouse_fixed_occurrences f LEFT JOIN warehouse_expenses e ON e.id=f.expense_id WHERE f.business_unit_id=${unit.id} AND f.due_date=${date}`);
+      const pendingExpenses = fixedOccurrences.filter(e=>!e.expense_id);
+      return { fixedOccurrences, pendingExpenses, date, orders: orders.map((o) => ({ ...o, items: items.filter((i) => i.order_id === o.id) })), receipts: receipts.map(r=>({...r,payments:paymentDetails.filter(p=>p.receipt_id===r.id)})),
+        accountPayments: accountPayments.map((p) => ({ ...p, payments: parts.filter((d) => d.account_movement_id === p.id), snapshots:accountSnapshots.filter(d=>d.account_movement_id===p.id) })), expenses };
     });
   },
   async expense(unit, data, userId, id = null, remove = false) {
@@ -121,6 +137,8 @@ export const WarehouseActivityService = {
       if (id) {
         [previous] = await rows(tx, sql`SELECT * FROM warehouse_expenses WHERE id=${Number(id)} AND business_unit_id=${unit.id}`);
         if (!previous || previous.deleted_at) fail(404, "Gasto no encontrado.");
+        const [fixed] = await rows(tx,sql`SELECT id FROM warehouse_fixed_occurrences WHERE expense_id=${previous.id}`);
+        if (fixed) fail(409,'Los gastos fijos pagados conservan su historial y no se pueden editar ni eliminar.');
         if (data.expectedVersion !== previous.version) fail(409, "El gasto cambió. Actualizá antes de reintentar.");
       } else {
         const [duplicate] = await rows(tx, sql`SELECT * FROM warehouse_expenses WHERE business_unit_id=${unit.id} AND idempotency_key=${requestKey}`);
@@ -149,28 +167,37 @@ export const WarehouseActivityService = {
     const requestKey = key(data.idempotencyKey), now = getArgentinaTime().datetime;
     return runWarehouseTransaction(async (tx) => {
       const [duplicate] = await rows(tx, sql`SELECT * FROM warehouse_receipts WHERE business_unit_id=${unit.id} AND idempotency_key=${requestKey}`);
-      if (duplicate) return { ...duplicate, duplicated: true };
+      if (duplicate) {
+        if (duplicate.order_id!==Number(orderId)) fail(409,'Clave de operación utilizada para otro pedido.');
+        return { ...duplicate, payments: await rows(tx,sql`SELECT * FROM warehouse_payment_parts WHERE receipt_id=${duplicate.id}`), duplicated: true };
+      }
       const [order] = await rows(tx, sql`SELECT * FROM warehouse_orders WHERE id=${Number(orderId)} AND business_unit_id=${unit.id}`);
       if (!order) fail(404, "Pedido no encontrado.");
       if (order.charge_to_account) fail(409, "Registrá este cobro en Clientes y cuentas para mantener el saldo del cliente.");
-      let cash, transfer, reversal = null;
+      let cash, transfer, reversal = null, parts = [];
       if (data.reversalOfId) {
         const [original] = await rows(tx, sql`SELECT * FROM warehouse_receipts WHERE id=${Number(data.reversalOfId)} AND order_id=${order.id} AND business_unit_id=${unit.id} AND reversal_of_id IS NULL`);
         if (!original) fail(404, "Cobro original no encontrado.");
         const [existing] = await rows(tx, sql`SELECT id FROM warehouse_receipts WHERE reversal_of_id=${original.id}`);
         if (existing) fail(409, "El cobro ya fue devuelto.");
         if (!String(data.reason || "").trim()) fail(400, "Indicá el motivo de la devolución.");
+        parts = (await rows(tx,sql`SELECT * FROM warehouse_payment_parts WHERE receipt_id=${original.id}`)).map(p=>({...p,base_cents:-p.base_cents,surcharge_cents:-p.surcharge_cents}));
         cash = -original.cash_cents; transfer = -original.transfer_cents; reversal = original.id;
       } else {
         if (["draft", "cancelled"].includes(order.status)) fail(409, "No se pueden cobrar borradores ni pedidos anulados.");
-        cash = cents(data.cash ?? 0, true); transfer = cents(data.transfer ?? 0, true);
+        parts = await paymentParts(tx,unit.id,data);
+        // Las columnas antiguas conservan el capital compatible; el desglose de medios
+        // y los ingresos reales provienen de warehouse_payment_parts.
+        cash = parts.filter(p=>p.kind==='cash').reduce((s,p)=>s+p.base_cents,0);
+        transfer = parts.filter(p=>p.kind!=='cash').reduce((s,p)=>s+p.base_cents,0);
         const [paid] = await rows(tx, sql`SELECT COALESCE(sum(cash_cents+transfer_cents),0) amount FROM warehouse_receipts WHERE order_id=${order.id}`);
         if (cash + transfer <= 0 || cash + transfer > Math.round(order.total * 100) - paid.amount) fail(400, "El cobro debe ser positivo y no superar el saldo pendiente.");
       }
       const occurred = timestamp(data.occurredAt);
       const [result] = await rows(tx, sql`INSERT INTO warehouse_receipts (business_unit_id,order_id,cash_cents,transfer_cents,occurred_at,reversal_of_id,reason,user_id,idempotency_key,created_at)
         VALUES (${unit.id},${order.id},${cash},${transfer},${occurred},${reversal},${String(data.reason || "").slice(0,2000)},${userId},${requestKey},${now}) RETURNING *`);
-      return result;
+      await storeParts(tx,parts,result.id);
+      return { ...result, payments: parts };
     });
   },
 };

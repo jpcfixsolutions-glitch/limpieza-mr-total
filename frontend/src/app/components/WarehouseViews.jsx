@@ -1,3 +1,4 @@
+import { WarehouseAccountPaymentModal } from "./WarehousePaymentEditor.jsx";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PackageCheck, PackageOpen, RefreshCw, Truck } from "lucide-react";
@@ -140,12 +141,13 @@ export function WarehousePurchasesView() {
 }
 
 export function WarehouseCustomersView() {
+  const [paying,setPaying]=useState(null);
   const [customers, setCustomers] = useState([]); const [form, setForm] = useState({ name: "", document: "", phone: "" });
   const load = useCallback(() => api.get("/customers").then((r) => setCustomers(r.data)), []);
   useEffect(() => { load().catch(() => toast.error("No se pudieron cargar los clientes.")); }, [load]);
   const create = async (e) => { e.preventDefault(); try { await api.post("/customers", form); setForm({ name: "", document: "", phone: "" }); await load(); } catch (err) { toast.error(err.response?.data?.message || "No se pudo crear el cliente."); } };
-  const pay = async (customer) => { const value = window.prompt(`Cobro para ${customer.name}. Deuda actual: ${money(customer.debt)}`, customer.debt); if (!value) return; try { await api.post(`/customers/${customer.id}/payments`, { amount: Number(value), methodName: "Efectivo", description: "Cobro Galpón" }); await load(); } catch (e) { toast.error(e.response?.data?.message || "No se pudo registrar el cobro."); } };
-  return <Page title="Clientes y cuentas corrientes" subtitle="Cartera mayorista separada; el Local figura con vínculo interno estable."><form onSubmit={create} className={`${card} grid md:grid-cols-4 gap-3 mb-6`}><input required className={input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Nombre" /><input required className={input} value={form.document} onChange={(e) => setForm({ ...form, document: e.target.value })} placeholder="Documento" /><input className={input} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="Teléfono" /><button className={button}>Agregar cliente</button></form><div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">{customers.map((c) => <div key={c.id} className={card}><p className="font-black">{c.name} {c.lastName} {c.isInternal && <span className="text-xs text-primary">INTERNO</span>}</p><p className="text-sm text-foreground/60">{c.document?.startsWith("WH-CONTACT-") ? c.phone : c.document}</p><p className="text-xl font-black mt-4">Deuda: {money(c.debt)}</p>{c.debt > 0 && <button onClick={() => pay(c)} className={`${button} mt-3`}>Registrar cobro</button>}</div>)}</div></Page>;
+  const pay = customer => setPaying(customer);
+  return <Page title="Clientes y cuentas corrientes" subtitle="Cartera mayorista separada; el Local figura con vínculo interno estable."><form onSubmit={create} className={`${card} grid md:grid-cols-4 gap-3 mb-6`}><input required className={input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Nombre" /><input required className={input} value={form.document} onChange={(e) => setForm({ ...form, document: e.target.value })} placeholder="Documento" /><input className={input} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="Teléfono" /><button className={button}>Agregar cliente</button></form><div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">{customers.map((c) => <div key={c.id} className={card}><p className="font-black">{c.name} {c.lastName} {c.isInternal && <span className="text-xs text-primary">INTERNO</span>}</p><p className="text-sm text-foreground/60">{c.document?.startsWith("WH-CONTACT-") ? c.phone : c.document}</p><p className="text-xl font-black mt-4">Deuda: {money(c.debt)}</p>{c.debt > 0 && <button onClick={() => pay(c)} className={`${button} mt-3`}>Registrar cobro</button>}</div>)}</div>{paying&&<WarehouseAccountPaymentModal customer={paying} onClose={()=>setPaying(null)} onSaved={()=>{setPaying(null);toast.success("Cobro registrado.");load().catch(()=>toast.error("No se pudieron actualizar los clientes."));}}/>}</Page>;
 }
 
 export function WarehouseMovementsView() {

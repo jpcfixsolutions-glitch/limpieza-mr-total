@@ -18,6 +18,7 @@ export function Sidebar({ activeView, onViewChange, role, onLogout, businessUnit
     { id: "warehouse-orders", icon: ClipboardList, label: "Pedidos", roles: ["admin", "EMPLEADO_GALPON"] },
     { id: "warehouse-stock", icon: Package, label: role === "EMPLEADO_GALPON" ? "Stock" : "Stock e insumos", roles: ["admin", "EMPLEADO_GALPON"] },
     { id: "warehouse-customers", icon: NotebookPen, label: "Clientes y cuentas", roles: ["admin"] },
+    { id: "warehouse-settings", icon: Settings, label: "Configuración", roles: ["admin"] },
     { id: "warehouse-stats", icon: BarChart3, label: "Estadísticas", roles: ["admin"] },
   ];
 
@@ -84,7 +85,7 @@ export function Sidebar({ activeView, onViewChange, role, onLogout, businessUnit
             <button
               key={item.id}
               onClick={() => onViewChange(item.id)}
-              className={`flex-1 flex flex-col items-center justify-center gap-0.5 transition-all active:scale-90 font-medium ${
+              className={`min-w-20 shrink-0 flex-1 px-1 flex flex-col items-center justify-center gap-0.5 transition-all active:scale-90 font-medium ${
                 isActive ? "text-secondary" : "text-foreground/60"
               }`}
             >

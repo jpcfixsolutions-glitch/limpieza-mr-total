@@ -1,3 +1,4 @@
+import { WarehouseSettingsView } from "./components/WarehouseSettingsView.jsx";
 import { useState, useEffect } from "react";
 import { Toaster } from "sonner";
 import { Sidebar } from "./components/Sidebar.jsx";
@@ -233,6 +234,7 @@ export default function App() {
         {businessUnit === "WAREHOUSE" && activeView === "warehouse-orders" && <WarehouseOrdersView user={user} />}
         {businessUnit === "WAREHOUSE" && activeView === "warehouse-stock" && (isEmployee ? <WarehouseEmployeeStockView /> : <WarehouseStockView />)}
         {businessUnit === "WAREHOUSE" && user.role === "admin" && activeView === "warehouse-customers" && <WarehouseCustomersView />}
+        {businessUnit === "WAREHOUSE" && user.role === "admin" && activeView === "warehouse-settings" && <WarehouseSettingsView />}
         {businessUnit === "WAREHOUSE" && user.role === "admin" && activeView === "warehouse-stats" && <WarehouseStatsView />}
 
         {businessUnit === "LOCAL" && activeView === "creador" && user.role === "creador" && <CreadorView />}

@@ -25,4 +25,8 @@ router.post("/expenses", adminOnly, WarehouseController.expense);
 router.put("/expenses/:id", adminOnly, WarehouseController.expense);
 router.delete("/expenses/:id", adminOnly, WarehouseController.expense);
 router.post("/orders/:id/receipts", adminOnly, WarehouseController.receipt);
+router.get('/settings', adminOnly, WarehouseController.settings);
+router.post('/settings/:entity', adminOnly, WarehouseController.saveSetting);
+router.put('/settings/:entity/:id', adminOnly, WarehouseController.saveSetting);
+router.post('/fixed-occurrences/:id/pay', adminOnly, WarehouseController.settleFixed);
 export default router;

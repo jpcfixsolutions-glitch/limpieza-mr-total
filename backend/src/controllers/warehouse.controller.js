@@ -1,3 +1,4 @@
+import { WarehouseSettingsService } from "../services/warehouseSettings.service.js";
 import { WarehouseService } from "../services/warehouse.service.js";
 import { sendControllerError } from "./controllerError.js";
 import { employeeOperations, employeeOrder } from "../services/warehouseEmployee.js";
@@ -11,6 +12,12 @@ function requestKey(req) {
 }
 
 export const WarehouseController = {
+  async settings(req,res) { try { res.set('Cache-Control','no-store').json(await WarehouseSettingsService.get(req.businessUnit)); } catch(e) { sendControllerError(res,e); } },
+  async saveSetting(req,res) { try {
+    if (!['expense','method'].includes(req.params.entity)) return res.status(404).json({message:'Configuración no encontrada.'});
+    res.json(await WarehouseSettingsService.save(req.businessUnit,req.params.entity,req.body,req.user.id,req.params.id));
+  } catch(e) { sendControllerError(res,e); } },
+  async settleFixed(req,res) { try { res.json(await WarehouseSettingsService.settle(req.businessUnit,req.params.id,req.body,req.user.id)); } catch(e) { sendControllerError(res,e); } },
   async operations(req, res) {
     try {
       const data = await WarehouseService.operations(req.businessUnit);

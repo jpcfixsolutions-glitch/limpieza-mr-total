@@ -1,3 +1,4 @@
+import { warehouseAccountPayment } from "./warehouseAccountPayment.service.js";
 import { CustomerModel } from "../models/customer.model.js";
 import { AccountMovementModel } from "../models/accountMovement.model.js";
 import { CashRegisterModel } from "../models/cashRegister.model.js";
@@ -188,6 +189,7 @@ export const CustomerService = {
   },
 
   async registerPayment(id, { payments, amount, methodName, description, idempotencyKey }, userId, businessUnit = null) {
+    if (businessUnit?.code === 'WAREHOUSE') return warehouseAccountPayment(businessUnit,id,{payments,amount,methodName,description,idempotencyKey},userId);
     const customer = await requireCustomer(id, businessUnit);
     const availableMethods = await PaymentMethodModel.findAll();
     const normalizedPayments = normalizePaymentEntries({ payments, amount, methodName }, availableMethods);
