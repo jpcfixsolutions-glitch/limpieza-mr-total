@@ -1,3 +1,4 @@
+import { WarehouseStockSettings } from './WarehouseStockSettings.jsx';
 import { CreditCard, ReceiptText } from 'lucide-react';
 import { SettingsSectionCard, SettingsItemCard, SettingsEmptyState } from './WarehouseSettingsCards.jsx';
 import { useCallback, useEffect, useState } from 'react';
@@ -28,7 +29,7 @@ export function WarehouseSettingsView() {
   }
   const field=(name,label,props={})=><label className="block text-sm font-bold">{label}<input className={input} value={form[name]??''} onChange={e=>setForm({...form,[name]:e.target.value})} {...props}/></label>;
   return <main className="flex-1 min-w-0 p-4 sm:p-6 md:p-10 pb-24"><div className="max-w-7xl mx-auto space-y-6">
-    <header><p className="text-primary text-xs font-black uppercase tracking-wider">Galpón mayorista</p><h1 className="text-3xl font-black">Configuración</h1><p className="mt-1 text-foreground/60">Gastos recurrentes y medios de cobro exclusivos del Galpón.</p></header>
+    <header><p className="text-primary text-xs font-black uppercase tracking-wider">Galpón mayorista</p><h1 className="text-3xl font-black">Configuración</h1><p className="mt-1 text-foreground/60">Stock, gastos recurrentes y medios de cobro exclusivos del Galpón.</p></header>
     {loading&&<p role="status">Cargando configuración…</p>}{error&&<div role="alert" className={card}>{error}<button className={`${button} ml-3`} onClick={load}>Reintentar</button></div>}
     {data&&<div className="grid grid-cols-1 lg:grid-cols-2 gap-5 xl:gap-7 items-stretch" aria-busy={loading}>
       <SettingsSectionCard id="warehouse-methods-title" icon={CreditCard} title="Métodos de Pago y Cargos"
@@ -51,6 +52,7 @@ export function WarehouseSettingsView() {
           : <SettingsEmptyState icon={ReceiptText} title="Sin gastos fijos" description="Agregá alquiler, servicios u otras obligaciones con el botón + de esta sección." />}
       </SettingsSectionCard>
     </div>}
+    <WarehouseStockSettings />
     {modal&&<WarehouseModal title={modal.toggle?`${form.active?'Desactivar':'Activar'} ${form.name}`:modal.entity==='expense'?(modal.record?'Editar gasto fijo':'Agregar gasto fijo'):(modal.record?'Editar método de pago':'Agregar método de pago')} busy={busy} onClose={()=>setModal(null)}><form className="space-y-4" onSubmit={save}>
       {modal.toggle?<p>{form.active?'Se impedirán nuevas operaciones con esta configuración.':'Se habilitarán nuevas operaciones con esta configuración.'} Los movimientos anteriores se conservan.</p>:<>
         {field('name',modal.entity==='expense'?'Concepto':'Nombre del método',{required:true,maxLength:200})}

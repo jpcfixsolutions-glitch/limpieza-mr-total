@@ -10,7 +10,7 @@ const order = (id, quantity, status = "confirmed", productId = 1) => ({
 test("agrupa dos pedidos y resta el stock una sola vez; asignación FIFO sin doble uso", () => {
   const result = calculateWarehouseProduction([order(2, 20), order(1, 25)], [{ id: 1, name: "Bolsas", stock: 15 }]);
   assert.equal(result.totalUnits, 30);
-  assert.deepEqual(result.items, [{ productId: 1, productName: "Bolsas", demand: 45, stock: 15, toProduce: 30,
+  assert.deepEqual(result.items, [{ productId: 1, productName: "Bolsas", unit: "u.", demand: 45, stock: 15, toProduce: 30,
     orders: [{ id: 1, createdAt: "2026-11-01 10:00:00", toProduce: 10 }, { id: 2, createdAt: "2026-11-02 10:00:00", toProduce: 20 }], oldestOrderAt: "2026-11-01 10:00:00" }]);
   assert.equal(result.allocations[1][0].assignedStock, 15);
   assert.equal(result.allocations[2][0].assignedStock, 0);

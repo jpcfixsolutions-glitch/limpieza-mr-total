@@ -7,6 +7,10 @@ import { db } from "../db/client.js";
 import { businessUnitProducts, inventoryMovements, productPriceTiers, products, stockModifications } from "../db/schema.js";
 import { adjustInventoryInTransaction, ensureInventoryBalance } from "./inventory.service.js";
 
+function assertLocalCatalogWrite(unit) {
+  if (unit?.code === 'WAREHOUSE') throw { status: 409, message: 'El catálogo comercial no se modifica desde Galpón. Utilizá Stock de líquidos para sus productos independientes.' };
+}
+
 function normalizeCodbarra(value) {
   if (value === undefined || value === null || value === "") return null;
   const str = String(value).trim();
@@ -106,9 +110,10 @@ async function attachTiers(products) {
 
 export const ProductService = {
   async getAll(businessUnit = null) {
-    return attachTiers(businessUnit?.id
+    const rows = businessUnit?.id
       ? await ProductModel.findAllForUnit(businessUnit.id)
-      : await ProductModel.findAll());
+      : await ProductModel.findAll();
+    return attachTiers(businessUnit?.code === 'WAREHOUSE' ? rows.filter(row => row.inventoryConfigured) : rows);
   },
 
   async getByCodbarra(codbarra, businessUnit = null, includeInactive = false) {
@@ -120,11 +125,12 @@ export const ProductService = {
         ? await ProductModel.findByCodbarraForUnitIncludingInactive(normalized, businessUnit.id)
         : await ProductModel.findByCodbarraForUnit(normalized, businessUnit.id)
       : await ProductModel.findByCodbarra(normalized);
-    if (!product) throw { status: 404, message: "Producto no encontrado con ese código de barras." };
+    if (!product || (businessUnit?.code === 'WAREHOUSE' && !product.inventoryConfigured)) throw { status: 404, message: "Producto no encontrado con ese código de barras." };
     return attachTiers(product);
   },
 
   async create({ name, codbarra, categoryId, priceGroupId, packTypeId, cost, price, wholesalePrice, stock, minStock, isAvailable, unitsPerPack, packPrice, priceTiers, fulfillmentMode }, businessUnit = null) {
+    assertLocalCatalogWrite(businessUnit);
     if (!name || price === undefined) {
       throw { status: 400, message: "Nombre y precio son requeridos." };
     }
@@ -230,6 +236,7 @@ export const ProductService = {
   },
 
   async update(id, updates, businessUnit = null, userId = null) {
+    assertLocalCatalogWrite(businessUnit);
     const product = businessUnit?.id
       ? await ProductModel.findByIdForUnitIncludingInactive(Number(id), businessUnit.id)
       : await ProductModel.findById(id);
@@ -438,6 +445,7 @@ export const ProductService = {
   },
 
   async remove(id, businessUnit = null) {
+    assertLocalCatalogWrite(businessUnit);
     if (!businessUnit?.id) {
       throw { status: 400, message: "Se requiere una unidad de negocio para dar de baja un producto." };
     }

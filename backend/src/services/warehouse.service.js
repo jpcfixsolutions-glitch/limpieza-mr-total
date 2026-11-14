@@ -1,3 +1,4 @@
+import { liquidInventory, milliliters, dispatchLiquid } from './warehouseLiquids.service.js';
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { db } from "../db/client.js";
@@ -9,15 +10,8 @@ import { getArgentinaTime } from "../db/timeUtils.js";
 import { adjustInventoryInTransaction, ensureInventoryBalance } from "./inventory.service.js";
 import { calculateWarehouseProduction } from "./warehouseProduction.js";
 
-// El driver SQLite local no admite transacciones de escritura superpuestas en
-// la misma conexión. Encolar Galpón evita bloqueos del driver; la versión y el
-// UPDATE condicional siguen protegiendo cambios entre sesiones/procesos.
-let warehouseQueue = Promise.resolve();
-export function runWarehouseTransaction(operation) {
-  const result = warehouseQueue.then(() => db.transaction(operation));
-  warehouseQueue = result.then(() => undefined, () => undefined);
-  return result;
-}
+import { runWarehouseTransaction } from './warehouseTransaction.js';
+export { runWarehouseTransaction } from './warehouseTransaction.js';
 
 function positiveInteger(value, label = "La cantidad") {
   const parsed = Number(value);
@@ -58,7 +52,7 @@ async function hydrateOrders(rows, executor = db) {
   return rows.map((row) => {
     const status = operationalStatus(row);
     return { ...row, status, items: (byOrder.get(row.id) || []).map((item) => ({
-      ...item, status: ["dispatched", "delivered"].includes(status) ? status : item.preparationStatus,
+      ...item, productId: item.liquidProductId ? `liquid:${item.liquidProductId}` : item.productId, unit: item.liquidProductId ? "L" : "u.", status: ["dispatched", "delivered"].includes(status) ? status : item.preparationStatus,
     })) };
   });
 }
@@ -76,22 +70,29 @@ async function snapshotItems(tx, unitId, rawItems, kind) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) throw { status: 400, message: "Agregá al menos un producto." };
   if (rawItems.some((item) => !item || typeof item !== "object" || Array.isArray(item))) throw { status: 400, message: "Los productos del pedido no son válidos." };
   const normalized = rawItems.map((item) => ({
-    productId: positiveInteger(item.productId, "El producto"),
-    quantity: positiveInteger(item.quantity),
+    productId: String(item.productId).startsWith("liquid:") ? String(item.productId) : positiveInteger(item.productId, "El producto"),
+    quantity: String(item.productId).startsWith("liquid:") ? (milliliters(item.quantity) > 0 ? milliliters(item.quantity) / 1000 : positiveInteger(0)) : positiveInteger(item.quantity),
     value: Number(kind === "order" ? (item.unitPrice ?? item.price) : item.unitCost),
   }));
   if (normalized.some((item) => !Number.isFinite(item.value) || item.value < 0)) throw { status: 400, message: "Hay un precio o costo inválido." };
-  const ids = [...new Set(normalized.map((item) => item.productId))];
+  const liquids = await liquidInventory(tx);
+  const ids = [...new Set(normalized.filter(item => typeof item.productId === "number").map((item) => item.productId))];
   const rows = await tx.select({ product: products, inventory: businessUnitProducts })
     .from(products).leftJoin(businessUnitProducts, and(
       eq(businessUnitProducts.productId, products.id), eq(businessUnitProducts.businessUnitId, unitId)
     )).where(inArray(products.id, ids));
   const byId = new Map(rows.map((row) => [row.product.id, row]));
   return normalized.map((item) => {
+    if (typeof item.productId === "string") {
+      if (kind !== "order") throw { status: 400, message: "Registrá el ingreso de líquidos desde Distribución del stock." };
+      const p = liquids.find(p => p.id === item.productId);
+      if (!p) throw { status: 400, message: "El líquido no pertenece al inventario del Galpón." };
+      return { productId: null, liquidProductId: p.liquidProductId, productName: p.name, quantity: item.quantity, unitPrice: item.value, unitCost: p.cost, total: item.quantity * item.value };
+    }
     const row = byId.get(item.productId);
     if (!row) throw { status: 400, message: `Producto inexistente (id ${item.productId}).` };
     const inventory = row.inventory;
-    if (kind === "order" && (!inventory || !inventory.isAvailable)) throw { status: 400, message: `"${row.product.name}" no está disponible en el Galpón.` };
+    if (!inventory || !inventory.isAvailable) throw { status: 400, message: `"${row.product.name}" no está disponible en el Galpón.` };
     const unitPrice = kind === "order" ? item.value : 0;
     const unitCost = kind === "purchase" ? item.value : Number(inventory?.cost ?? 0);
     return { productId: item.productId, productName: row.product.name, quantity: item.quantity, unitPrice, unitCost, total: item.quantity * (kind === "order" ? unitPrice : unitCost) };
@@ -131,11 +132,12 @@ export const WarehouseService = {
     assertWarehouse(unit);
     return runWarehouseTransaction(async (tx) => {
       const orders = await this.listOrders(unit, tx);
-      const inventory = await tx.select({
+      const legacyInventory = await tx.select({
         id: products.id, name: products.name, codbarra: products.codbarra,
         stock: businessUnitProducts.stock, price: businessUnitProducts.salePrice, isAvailable: businessUnitProducts.isAvailable,
       }).from(businessUnitProducts).innerJoin(products, eq(products.id, businessUnitProducts.productId))
         .where(eq(businessUnitProducts.businessUnitId, unit.id));
+      const inventory = [...legacyInventory, ...await liquidInventory(tx)];
       const customerList = await tx.select({
         id: customers.id, name: customers.name, lastName: customers.lastName, phone: customers.phone,
         address: warehouseCustomerDetails.address,
@@ -145,11 +147,11 @@ export const WarehouseService = {
       const { allocations, ...production } = calculateWarehouseProduction(orders, inventory);
       let preview;
       if (previewItems) {
-        const items = await snapshotItems(tx, unit.id, previewItems, "order");
+        const items = (await snapshotItems(tx, unit.id, previewItems, "order")).map(item => ({ ...item, productId: item.liquidProductId ? `liquid:${item.liquidProductId}` : item.productId }));
         const projected = calculateWarehouseProduction([...orders, {
           id: Number.MAX_SAFE_INTEGER, status: "confirmed", createdAt: getArgentinaTime().datetime, items,
         }], inventory);
-        preview = { items: projected.allocations[Number.MAX_SAFE_INTEGER], production: { items: projected.items, totalUnits: projected.totalUnits } };
+        preview = { items: projected.allocations[Number.MAX_SAFE_INTEGER], production: { items: projected.items, totalUnits: projected.totalUnits, totalLiters: projected.totalLiters } };
       }
       const today = warehouseDatetime().slice(0, 10);
       return {
@@ -296,7 +298,7 @@ export const WarehouseService = {
     });
   },
 
-  async changeOrderStatus(id, nextStatus, userId, unit, expectedVersion) {
+  async changeOrderStatus(id, nextStatus, userId, unit, expectedVersion, liquidAllocations = {}) {
     assertWarehouse(unit);
     const requested = String(nextStatus || "").toLowerCase();
     const allowed = new Set(["confirmed", "preparing", "ready", "dispatched", "delivered", "cancelled"]);
@@ -322,6 +324,10 @@ export const WarehouseService = {
 
       if (requested === "dispatched") {
         for (const item of items) {
+          if (item.liquidProductId) {
+            await dispatchLiquid(tx, item, liquidAllocations[item.id], userId);
+            continue;
+          }
           const balance = await ensureInventoryBalance(tx, unit.id, item.productId);
           await adjustInventoryInTransaction(tx, {
             businessUnitId: unit.id, productId: item.productId, direction: "OUT", quantity: item.quantity,
@@ -341,6 +347,7 @@ export const WarehouseService = {
       }
       if (requested === "cancelled" && order.status === "dispatched") {
         for (const item of items) {
+          if (item.liquidProductId) { await dispatchLiquid(tx, item, [], userId, true); continue; }
           const original = await tx.select().from(inventoryMovements).where(eq(inventoryMovements.idempotencyKey, `order-dispatch:${order.id}:${item.id}`)).then((rows) => rows[0]);
           await adjustInventoryInTransaction(tx, {
             businessUnitId: unit.id, productId: item.productId, direction: "IN", quantity: item.quantity,

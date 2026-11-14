@@ -68,9 +68,11 @@ before(async () => {
     "INSERT INTO promotions VALUES (1, 'Promo mixta', NULL, 35, 1, NULL), (2, '3 productos por $50', NULL, 50, 1, NULL)",
     "INSERT INTO promotion_items VALUES (1,1,1,1),(2,1,2,1),(3,2,1,3)",
   ], "write");
+  const { warehouseLiquidsMigration } = await import("../db/warehouseLiquidsMigration.js");
+  await client.batch(warehouseLiquidsMigration.statements, "write");
 });
 
-after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
 
 async function stock(unitId, productId) {
   const result = await client.execute({ sql: "SELECT stock FROM business_unit_products WHERE business_unit_id=? AND product_id=?", args: [unitId, productId] });
@@ -307,7 +309,7 @@ test("la baja de un producto migrado sin fila de inventario crea una baja contro
   assert.equal((await ProductService.getAll(local)).some((product) => product.id === 3), true);
   await ProductService.remove(3, local);
   assert.equal((await ProductService.getAll(local)).some((product) => product.id === 3), false);
-  assert.equal((await ProductService.getAll(warehouse)).some((product) => product.id === 3), true);
+  assert.equal((await ProductService.getAll(warehouse)).some((product) => product.id === 3), false);
 
   const inventory = await client.execute("SELECT is_available FROM business_unit_products WHERE business_unit_id = 1 AND product_id = 3");
   const historical = await client.execute("SELECT product_name FROM transaction_items WHERE product_id = 3");

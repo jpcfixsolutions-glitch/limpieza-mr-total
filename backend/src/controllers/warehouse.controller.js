@@ -55,7 +55,7 @@ export const WarehouseController = {
   async changeOrderStatus(req, res) {
     try {
       if (isEmployee(req) && !["preparing", "ready", "dispatched", "delivered"].includes(req.body.status)) return res.status(403).json({ message: "No tenés permiso para cancelar ni confirmar borradores." });
-      const order = await WarehouseService.changeOrderStatus(req.params.id, req.body.status, req.user.id, req.businessUnit, req.body.expectedVersion);
+      const order = await WarehouseService.changeOrderStatus(req.params.id, req.body.status, req.user.id, req.businessUnit, req.body.expectedVersion, req.body.liquidAllocations);
       res.json(isEmployee(req) ? employeeOrder(order) : order);
     }
     catch (e) { sendControllerError(res, e); }

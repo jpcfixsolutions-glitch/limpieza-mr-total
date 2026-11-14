@@ -65,9 +65,11 @@ before(async () => {
     "INSERT INTO promotions VALUES (1, 'Promo mixta', NULL, 35, 1, NULL), (2, '3 productos por $50', NULL, 50, 1, NULL)",
     "INSERT INTO promotion_items VALUES (1,1,1,1),(2,1,2,1),(3,2,1,3)",
   ], "write");
+  const { warehouseLiquidsMigration } = await import("../db/warehouseLiquidsMigration.js");
+  await client.batch(warehouseLiquidsMigration.statements, "write");
 });
 
-after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
 
 async function stock(unitId, productId) {
   const result = await client.execute({ sql: "SELECT stock FROM business_unit_products WHERE business_unit_id=? AND product_id=?", args: [unitId, productId] });

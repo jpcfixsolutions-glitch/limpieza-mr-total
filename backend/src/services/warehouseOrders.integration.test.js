@@ -64,14 +64,15 @@ before(async () => {
     "INSERT INTO promotions VALUES (1, 'Promo mixta', NULL, 35, 1, NULL), (2, '3 productos por $50', NULL, 50, 1, NULL)",
     "INSERT INTO promotion_items VALUES (1,1,1,1),(2,1,2,1),(3,2,1,3)",
   ], "write");
+  const { warehouseLiquidsMigration } = await import("../db/warehouseLiquidsMigration.js");
+  await client.batch(warehouseLiquidsMigration.statements, "write");
+  const { warehouseStockOptionsMigration } = await import("../db/warehouseStockOptionsMigration.js");
+  await client.batch(warehouseStockOptionsMigration.statements,"write");
+  for (const name of ["Tacho","Tarro","Bidón"]) await client.execute({sql:"INSERT INTO warehouse_stock_options(business_unit_id,type,name,name_key) VALUES(2,'container-type',?,?)",args:[name,name.toLowerCase()]});
 });
 
-after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); });
 
-async function stock(unitId, productId) {
-  const result = await client.execute({ sql: "SELECT stock FROM business_unit_products WHERE business_unit_id=? AND product_id=?", args: [unitId, productId] });
-  return Number(result.rows[0].stock);
-}
 
 test("pedidos y producción del Galpón comparten demanda, disponibilidad y entregas persistentes", async (t) => {
   const localBefore = await stock(1, 1);
@@ -270,5 +271,125 @@ test("las rutas reales de operaciones y previsualización exigen administrador d
     const retry = await fetch(`${url}/customers`, { method: "POST", headers, body: JSON.stringify(customer) });
     assert.equal(retry.status, 200);
     assert.equal((await retry.json()).id, (await created.json()).id);
+    const liquidPayload={name:'Prueba HTTP líquido',cost:10,price:20,minStock:1,containers:[{kind:'Granel',capacity:0,count:1,content:1,location:'WAREHOUSE'}],idempotencyKey:'http-liquid-create'};
+    assert.equal((await fetch(`${url}/liquids`,{method:'POST',headers:{...headers,'X-Business-Unit':'LOCAL'},body:JSON.stringify(liquidPayload)})).status,403);
+    assert.equal((await fetch(`${url}/liquids`,{method:'POST',headers,body:JSON.stringify(liquidPayload)})).status,200);
+    const liquidList=await (await fetch(`${url}/liquids`,{headers})).json();
+    let liquid=liquidList.find(p=>p.name===liquidPayload.name);
+    await client.execute("INSERT INTO users(id,name,email,password,role) VALUES(999,'Operario HTTP','liquid-worker@test','x','EMPLEADO_GALPON')");
+    const workerHeaders={...headers,Authorization:`Bearer ${jwt.sign({id:999,role:'EMPLEADO_GALPON'},process.env.JWT_SECRET)}`};
+    const workerProducts=await (await fetch(`${url}/liquids`,{headers:workerHeaders})).json();
+    assert.ok(workerProducts.every(p=>!('cost' in p) && !('price' in p)));
+    assert.equal((await fetch(`${url}/liquids`,{method:'POST',headers:workerHeaders,body:JSON.stringify(liquidPayload)})).status,403);
+    assert.equal((await fetch(`${url}/liquids/${liquid.liquidProductId}/history`,{headers:workerHeaders})).status,403);
+    assert.equal((await fetch(`${url}/liquids/${liquid.liquidProductId}`,{method:'DELETE',headers:workerHeaders,body:JSON.stringify({expectedVersion:liquid.version})})).status,403);
+    assert.equal((await fetch(`${url}/liquids/${liquid.liquidProductId}`,{method:'PUT',headers:workerHeaders,body:JSON.stringify({...liquidPayload,expectedVersion:liquid.version})})).status,403);
+    const adjustment={containers:[{kind:'Granel',capacity:0,count:1,content:1.25,location:'WAREHOUSE'}],expectedVersion:liquid.version,idempotencyKey:'http-worker-adjust'};
+    assert.equal((await fetch(`${url}/liquids/${liquid.liquidProductId}`,{method:'PUT',headers:workerHeaders,body:JSON.stringify(adjustment)})).status,200);
+    liquid=(await (await fetch(`${url}/liquids`,{headers})).json()).find(p=>p.liquidProductId===liquid.liquidProductId);
+    assert.equal(liquid.stock,1.25); assert.equal(liquid.cost,10);
+    assert.equal((await fetch(`${url}/liquids/${liquid.liquidProductId}`,{method:'PUT',headers,body:JSON.stringify({containers:[],expectedVersion:liquid.version,idempotencyKey:'http-empty'})})).status,200);
+    assert.equal((await fetch(`${url}/liquids/${liquid.liquidProductId}`,{method:'DELETE',headers,body:JSON.stringify({expectedVersion:liquid.version+1})})).status,200);
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
+
+test('líquidos: aislamiento, envases, concurrencia, permisos, producción y despacho transaccional', async (t) => {
+  const { WarehouseLiquidsService: service } = await import('./warehouseLiquids.service.js');
+  const { ProductService } = await import('./product.service.js');
+  const localSnapshot = async () => {
+    const results = await client.batch(['SELECT * FROM products ORDER BY id', 'SELECT * FROM business_unit_products WHERE business_unit_id = 1 ORDER BY id'], 'read');
+    return JSON.stringify(results.map(r => r.rows));
+  };
+  const before = await localSnapshot();
+  const save = (id, data, employee = false) => service.save(id, { ...data, idempotencyKey: data.idempotencyKey || crypto.randomUUID() }, 1, warehouse, employee);
+  const get = async id => (await service.list(warehouse)).find(p => p.liquidProductId === id);
+  const row = (kind, capacity, count, content, location = 'WAREHOUSE') => ({kind,capacity,count,content,location});
+  const result = await save(null, { name: 'Jabón líquido exclusivo', barcode: '990099', cost: 100, price: 200, minStock: 5,
+    containers: [row('Tacho',20,1,20),row('Tarro',5,1,5),row('Tarro',5,2,10,'LOCAL')] });
+  const id = result.liquidProductId;
+  await t.test('25 L en Galpón, 10 L En Local y dos tarros agrupados; nunca aparece en Local', async () => {
+    const p = await get(id);
+    assert.deepEqual([p.stock,p.inLocal,p.total], [25,10,35]);
+    assert.equal(p.containers.find(c=>c.location==='LOCAL').count,2);
+    assert.equal((await service.list(warehouse)).length,1);
+    assert.ok(!(await ProductService.getAll(local)).some(p=>p.name==='Jabón líquido exclusivo'));
+    assert.equal(await localSnapshot(),before);
+    await assert.rejects(()=>ProductService.update(1,{name:'Cambio desde Galpón'},warehouse,1),e=>e.status===409);
+    await assert.rejects(()=>ProductService.create({name:'Catálogo compartido',price:1},warehouse),e=>e.status===409);
+    assert.equal(await localSnapshot(),before);
+  });
+  await t.test('traslado físico conserva total y Local; envases parciales cuentan contenido real', async () => {
+    let p = await get(id);
+    await save(id,{expectedVersion:p.version,containers:[row('Tacho',20,1,20),row('Tarro',5,3,15,'LOCAL')]});
+    p = await get(id); assert.deepEqual([p.stock,p.inLocal,p.total],[20,15,35]);
+    await save(id,{expectedVersion:p.version,containers:[row('Tacho',20,1,12),row('Bidón',5,1,5),row('Tarro',5,3,15,'LOCAL')]});
+    p = await get(id); assert.equal(p.stock,17);
+    await save(id,{expectedVersion:p.version,containers:p.containers.map(c=>({...c,content:c.kind==='Tacho'?9:c.content}))});
+    assert.equal((await get(id)).stock,14);
+    const {createClient} = await import('@libsql/client');
+    const independentClient = createClient({url:process.env.TURSO_DATABASE_URL});
+    try {
+      const persisted = await independentClient.execute({sql:"SELECT SUM(content_ml) AS ml FROM warehouse_liquid_containers WHERE product_id=? AND location='WAREHOUSE'",args:[id]});
+      assert.equal(persisted.rows[0].ml,14000);
+    } finally { independentClient.close(); }
+    assert.equal(await localSnapshot(),before);
+  });
+  await t.test('rechaza negativos, grupos parciales, capacidad excedida y cambios comerciales del empleado',async()=>{
+    const p=await get(id);
+    for(const containers of [[row('Tacho',20,1,-1)],[row('Tarro',5,2,9)],[row('Tarro',5,1,6)]]) {
+      await assert.rejects(()=>save(id,{expectedVersion:p.version,containers}),e=>e.status===400);
+    }
+    await assert.rejects(()=>save(id,{expectedVersion:p.version,price:999,containers:p.containers},true),e=>e.status===403);
+    await assert.rejects(()=>service.list(local),e=>e.status===403);
+    await assert.rejects(()=>service.archive(id,{expectedVersion:p.version},1,warehouse),e=>e.status===409);
+  });
+  await t.test('reintentos idempotentes y dos sesiones no pisan cantidades; auditoría persistida',async()=>{
+    const p=await get(id), payload={expectedVersion:p.version,containers:p.containers,idempotencyKey:'liquid-retry'};
+    await save(id,payload); assert.equal((await save(id,payload)).duplicated,true);
+    const current=await get(id);
+    const attempts=await Promise.allSettled([save(id,{expectedVersion:current.version,containers:current.containers}),save(id,{expectedVersion:current.version,containers:current.containers})]);
+    assert.equal(attempts.filter(r=>r.status==='fulfilled').length,1);
+    assert.equal(attempts.find(r=>r.status==='rejected').reason.status,409);
+    const history=await service.history(id,warehouse);
+    assert.ok(history.length>=5); assert.ok(history.every(r=>r.userId===1 && r.createdAt));
+    assert.equal((await get(id)).stock,14);
+  });
+  await t.test('estados y faltantes excluyen litros En Local; admite pedidos decimales',async()=>{
+    let p=await get(id);
+    await save(id,{expectedVersion:p.version,containers:[row('Granel',0,1,5),row('Tarro',5,2,10,'LOCAL')]},true);
+    p=await get(id); assert.equal(p.status,'Bajo stock');
+    const preview=await WarehouseService.operations(warehouse,[{productId:p.id,quantity:7.125,unitPrice:200}]);
+    assert.equal(preview.preview.items[0].toProduce,2.125);
+    assert.equal(preview.preview.production.totalLiters,2.125);
+    await save(id,{expectedVersion:p.version,containers:[row('Granel',0,1,0),row('Tarro',5,2,10,'LOCAL')]},true);
+    p=await get(id); assert.equal(p.status,'Sin stock'); assert.equal(p.inLocal,10);
+  });
+  await t.test('despacho exige asignación, revierte errores, descuenta una vez y cancela sin duplicar',async()=>{
+    let p=await get(id);
+    await save(id,{expectedVersion:p.version,containers:[row('Bidón',5,2,10),row('Tarro',5,2,10,'LOCAL')]});
+    p=await get(id);
+    let order=await WarehouseService.createOrder({customerId:2,status:'confirmed',items:[{productId:p.id,quantity:3.125,unitPrice:200}]},1,warehouse);
+    const item=order.items[0];
+    order=await WarehouseService.changeItemStatus(order.id,item.id,'ready',warehouse);
+    order=await WarehouseService.changeOrderStatus(order.id,'ready',1,warehouse);
+    await assert.rejects(()=>WarehouseService.changeOrderStatus(order.id,'dispatched',1,warehouse),e=>e.status===400);
+    const localContainer=p.containers.find(c=>c.location==='LOCAL');
+    await assert.rejects(()=>WarehouseService.changeOrderStatus(order.id,'dispatched',1,warehouse,order.version,{[item.id]:[{containerId:localContainer.id,liters:3.125}]}),e=>e.status===409);
+    const source=p.containers.find(c=>c.location==='WAREHOUSE');
+    await assert.rejects(()=>WarehouseService.changeOrderStatus(order.id,'dispatched',1,warehouse,order.version,{[item.id]:[{containerId:source.id,liters:2}]}),e=>e.status===400);
+    assert.equal((await get(id)).stock,10);
+    await WarehouseService.changeOrderStatus(order.id,'dispatched',1,warehouse,order.version,{[item.id]:[{containerId:source.id,liters:3.125}]});
+    await WarehouseService.changeOrderStatus(order.id,'dispatched',1,warehouse);
+    p=await get(id); assert.equal(p.stock,6.875); assert.equal(p.inLocal,10);
+    assert.ok(p.containers.some(c=>c.count===1 && c.content===1.875));
+    await WarehouseService.changeOrderStatus(order.id,'cancelled',1,warehouse);
+    await WarehouseService.changeOrderStatus(order.id,'cancelled',1,warehouse);
+    assert.equal((await get(id)).stock,10);
+    assert.equal(await localSnapshot(),before);
+  });
+});
+
+async function stock(unitId, productId) {
+  const result = await client.execute({ sql: "SELECT stock FROM business_unit_products WHERE business_unit_id=? AND product_id=?", args: [unitId, productId] });
+  return Number(result.rows[0].stock);
+}

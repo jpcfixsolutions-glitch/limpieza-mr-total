@@ -9,7 +9,8 @@ const JWT_SECRET = process.env.JWT_SECRET || "yofre-secret-key";
 // requerían una sesión (catálogo, estadísticas, movimientos, etc.).
 function employeeOperationAllowed(req) {
   const path = `${req.baseUrl || ""}${req.path || ""}`.replace(/^\/api(?=\/)/, "").replace(/\/+$/, "");
-  if (req.method === "GET") return ["/warehouse/operations", "/warehouse/orders"].includes(path);
+  if (req.method === "GET") return ["/warehouse/operations", "/warehouse/orders", "/warehouse/liquids", "/warehouse/stock-options", "/warehouse/legacy-stock"].includes(path);
+  if (req.method === "PUT") return /^\/warehouse\/liquids\/[1-9]\d*$/.test(path);
   if (req.method !== "PATCH") return false;
   return /^\/warehouse\/orders\/[1-9]\d*\/status$/.test(path)
     || /^\/warehouse\/orders\/[1-9]\d*\/items\/[1-9]\d*\/status$/.test(path)

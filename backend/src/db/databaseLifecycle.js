@@ -1,3 +1,5 @@
+import { warehouseStockOptionsMigration } from './warehouseStockOptionsMigration.js';
+import { warehouseLiquidsMigration, verifyWarehouseLiquidsCompatibility } from './warehouseLiquidsMigration.js';
 import { getTableColumns, getTableName } from "drizzle-orm";
 import * as schema from "./schema.js";
 import { client } from "./client.js";
@@ -463,7 +465,7 @@ const migrations = [
   },
 ];
 
-migrations.push(warehouseFinanceMigration, warehouseSettingsMigration);
+migrations.push(warehouseFinanceMigration, warehouseSettingsMigration, warehouseLiquidsMigration, warehouseStockOptionsMigration);
 
 function quoteIdentifier(identifier) {
   return `"${String(identifier).replaceAll('"', '""')}"`;
@@ -487,6 +489,8 @@ export async function applyDatabaseMigrations() {
 
   for (const migration of migrations) {
     if (applied.has(migration.id)) continue;
+
+    if (migration.id === warehouseLiquidsMigration.id) await verifyWarehouseLiquidsCompatibility(client);
 
     await client.batch(
       [

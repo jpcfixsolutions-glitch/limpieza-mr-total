@@ -11,10 +11,10 @@ export function WarehouseProductionList({ production, expanded = false }) {
       <div className="flex justify-between gap-4 py-3 text-xs sm:text-sm font-bold text-foreground/60"><span>Producto</span><span className="text-right">Cantidad a producir</span></div>
       {rows.map((row) => <div key={row.productId ?? row.productName} className="flex items-center justify-between gap-4 py-3">
         <span className="min-w-0 break-words [overflow-wrap:anywhere] font-medium">{row.productName}</span>
-        <span className="shrink-0 font-black text-primary text-right tabular-nums">{units(row.toProduce)} <span className="text-xs font-medium">u.</span></span>
+        <span className="shrink-0 font-black text-primary text-right tabular-nums">{units(row.toProduce)} <span className="text-xs font-medium">{row.unit || "u."}</span></span>
       </div>)}
     </div>
-    <p className="pt-4 mt-2 border-t border-foreground/10 font-bold">Total: <span className="text-primary tabular-nums">{units(production.totalUnits)}</span> unidades pendientes de producción.</p>
+    <p className="pt-4 mt-2 border-t border-foreground/10 font-bold">Total: <span className="text-primary tabular-nums">{units(production.totalUnits)}</span> unidades y {units(production.totalLiters || 0)} L pendientes de producción.</p>
   </>;
 }
 

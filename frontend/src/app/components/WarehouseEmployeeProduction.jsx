@@ -19,10 +19,10 @@ export function WarehouseEmployeeProduction({ production, error, loading, onDeta
       : !production && loading ? <p role="status" className="py-4 text-foreground/60">Calculando faltantes…</p>
       : !items.length ? <p className="py-4 text-foreground/60">No hay productos pendientes de producción</p>
       : <div className="divide-y divide-foreground/10 max-h-[32rem] overflow-y-auto mt-3 pr-1">{items.map((item) => <article key={item.productId ?? item.productName} className="py-4 space-y-2">
-        <div className="flex flex-wrap justify-between items-start gap-2"><h3 className="font-bold min-w-0 break-words">{item.productName}</h3><p className="text-primary font-black tabular-nums">{number(item.toProduce)} u. a producir</p></div>
-        <p className="text-sm text-foreground/60">Stock disponible: <strong>{number(item.stock)} u.</strong></p>
+        <div className="flex flex-wrap justify-between items-start gap-2"><h3 className="font-bold min-w-0 break-words">{item.productName}</h3><p className="text-primary font-black tabular-nums">{number(item.toProduce)} {item.unit || "u."} a producir</p></div>
+        <p className="text-sm text-foreground/60">Stock disponible: <strong>{number(item.stock)} {item.unit || "u."}</strong></p>
         <p className="text-xs text-foreground/60">Pedido más antiguo con faltante: {date(item.oldestOrderAt)}</p>
-        <div className="flex flex-wrap gap-2">{item.orders.map((order) => <button key={order.id} type="button" onClick={() => onDetail(order.id)} className="text-primary bg-primary/5 rounded-lg px-3 py-2 text-sm font-bold">Pedido #{order.id} · {number(order.toProduce)} u.</button>)}</div>
+        <div className="flex flex-wrap gap-2">{item.orders.map((order) => <button key={order.id} type="button" onClick={() => onDetail(order.id)} className="text-primary bg-primary/5 rounded-lg px-3 py-2 text-sm font-bold">Pedido #{order.id} · {number(order.toProduce)} {item.unit || "u."}</button>)}</div>
       </article>)}</div>}
   </section>;
 }

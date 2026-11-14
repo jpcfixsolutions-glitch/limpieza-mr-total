@@ -50,6 +50,7 @@ export const ProductController = {
 
   async bulkAssign(req, res) {
     try {
+      if (req.businessUnit?.code === 'WAREHOUSE') return res.status(409).json({message:'El catálogo comercial no se modifica desde Galpón.'});
       res.json(await ProductService.bulkAssign(req.body));
     } catch (err) {
       sendControllerError(res, err);

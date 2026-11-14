@@ -74,7 +74,7 @@ function NewOrderModal({ data, onClose, onSaved, onCustomerCreated }) {
   // No reserva stock ni persiste un pedido provisional.
   useEffect(() => {
     setPreview(null); setPreviewError("");
-    if (!items.length || items.some((item) => !Number.isSafeInteger(Number(item.quantity)) || Number(item.quantity) < 1)) { setPreviewLoading(false); return; }
+    if (!items.length || items.some((item) => !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0 || (String(item.productId).startsWith("liquid:") ? Math.abs(Number(item.quantity)*1000-Math.round(Number(item.quantity)*1000))>1e-6 : !Number.isSafeInteger(Number(item.quantity))))) { setPreviewLoading(false); return; }
     const controller = new AbortController();
     setPreviewLoading(true);
     const timeout = window.setTimeout(() => {
@@ -115,7 +115,7 @@ function NewOrderModal({ data, onClose, onSaved, onCustomerCreated }) {
     event.preventDefault();
     if (savingRef.current || customerSavingRef.current) return;
     if (!customerId || !items.length) { setError("Seleccioná un cliente y agregá al menos un producto."); return; }
-    if (items.some((item) => !Number.isSafeInteger(Number(item.quantity)) || Number(item.quantity) < 1)) { setError("Las cantidades deben ser unidades enteras mayores a cero."); return; }
+    if (items.some((item) => !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0 || (String(item.productId).startsWith("liquid:") ? Math.abs(Number(item.quantity)*1000-Math.round(Number(item.quantity)*1000))>1e-6 : !Number.isSafeInteger(Number(item.quantity))))) { setError("Indicá cantidades positivas: litros con hasta tres decimales o unidades enteras."); return; }
     savingRef.current = true; setSaving(true); setError("");
     try {
       await api.post("/warehouse/orders", { customerId: Number(customerId), status: "confirmed", items: items.map((item) => ({ ...item, quantity: Number(item.quantity) })), observations, chargeToAccount, idempotencyKey: requestKey.current });
@@ -155,22 +155,22 @@ function NewOrderModal({ data, onClose, onSaved, onCustomerCreated }) {
           <label className="block text-sm font-bold">Buscar producto<input type="search" className={`${input} mt-1`} placeholder="Nombre o código" value={productSearch} onChange={(e) => setProductSearch(e.target.value)} /></label>
           <div className="max-h-48 overflow-y-auto border border-foreground/10 rounded-xl divide-y divide-foreground/10">
             {productMatches.slice(0, 30).map((product) => <button key={product.id} type="button" onClick={() => addProduct(product)} className="w-full text-left px-3 py-2 flex items-center justify-between gap-3 hover:bg-background">
-              <span className="min-w-0 break-words text-sm"><span className="font-bold">{product.name}</span><span className="block text-foreground/60">{product.codbarra ? `Código ${product.codbarra} · ` : ""}Stock: {number(product.stock)} u.</span></span>
+              <span className="min-w-0 break-words text-sm"><span className="font-bold">{product.name}</span><span className="block text-foreground/60">{product.codbarra ? `Código ${product.codbarra} · ` : ""}Stock: {number(product.stock)} {product.unit || "u."}</span></span>
               <Plus size={18} className="shrink-0 text-primary" aria-label="Agregar" />
             </button>)}
             {!productMatches.length && <p className="p-3 text-sm text-foreground/60">No se encontraron productos disponibles.</p>}
           </div>
           {productMatches.length > 30 && <p className="text-xs text-foreground/60">Mostrando 30 resultados. Escribí para afinar la búsqueda.</p>}
           <div className="space-y-2">{items.map((item) => <div key={item.productId} className="grid grid-cols-[minmax(0,1fr)_6rem_auto] gap-2 items-center bg-background rounded-xl p-3">
-            <div className="min-w-0"><p className="font-bold text-sm break-words">{products.get(item.productId)?.name}</p><p className="text-xs text-foreground/60">Stock: {number(products.get(item.productId)?.stock || 0)} u.</p></div>
-            <label className="text-xs font-bold">Cantidad<input className={`${input} mt-1`} aria-label={`Cantidad de ${products.get(item.productId)?.name}`} required type="number" step="1" min="1" value={item.quantity} onChange={(e) => { edited(); setItems(items.map((row) => row.productId === item.productId ? { ...row, quantity: e.target.value } : row)); }} /></label>
+            <div className="min-w-0"><p className="font-bold text-sm break-words">{products.get(item.productId)?.name}</p><p className="text-xs text-foreground/60">Stock: {number(products.get(item.productId)?.stock || 0)} {products.get(item.productId)?.unit || "u."}</p></div>
+            <label className="text-xs font-bold">Cantidad<input className={`${input} mt-1`} aria-label={`Cantidad de ${products.get(item.productId)?.name}`} required type="number" step={String(item.productId).startsWith("liquid:") ? "0.001" : "1"} min={String(item.productId).startsWith("liquid:") ? "0.001" : "1"} value={item.quantity} onChange={(e) => { edited(); setItems(items.map((row) => row.productId === item.productId ? { ...row, quantity: e.target.value } : row)); }} /></label>
             <button type="button" className="p-2 text-primary" aria-label={`Quitar ${products.get(item.productId)?.name}`} onClick={() => { edited(); setItems(items.filter((row) => row.productId !== item.productId)); }}><Trash2 size={18} /></button>
           </div>)}</div>
           {previewLoading && <p role="status" className="text-sm text-foreground/60">Calculando disponibilidad y producción…</p>}
           {previewError && <p role="status" className="text-sm text-primary">{previewError}</p>}
           {warnings.length > 0 && <div role="status" className="bg-primary/5 border border-primary/15 rounded-xl p-3 text-sm">
             <p className="font-bold">Este pedido requiere producción y se puede registrar.</p>
-            {warnings.map((row) => <p key={row.productId} className="mt-1 break-words">{row.productName}: {number(row.toProduce)} u. adicionales · pendiente global previsto: {number(preview.production.items.find((item) => item.productId === row.productId)?.toProduce || 0)} u.</p>)}
+            {warnings.map((row) => <p key={row.productId} className="mt-1 break-words">{row.productName}: {number(row.toProduce)} {String(row.productId).startsWith("liquid:") ? "L" : "u."} adicionales · pendiente global previsto: {number(preview.production.items.find((item) => item.productId === row.productId)?.toProduce || 0)} {String(row.productId).startsWith("liquid:") ? "L" : "u."}</p>)}
             <p className="mt-2 text-xs text-foreground/60">Estimación con el stock asignable actual; se recalcula al actualizar los pedidos.</p>
           </div>}
           <label className="block text-sm font-bold">Observaciones<textarea className={`${input} mt-1`} value={observations} onChange={(e) => { edited(); setObservations(e.target.value); }} rows={2} /></label>
@@ -196,6 +196,7 @@ export function WarehouseOrdersView({ user, employeeHome = false }) {
   const [confirmation, setConfirmation] = useState(null);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState("");
+  const [liquidAllocations, setLiquidAllocations] = useState({});
   const updatingRef = useRef(false);
   const orders = useMemo(() => (data?.orders || []).filter((order) => {
     if (employeeHome && !["confirmed", "preparing"].includes(order.status)) return false;
@@ -205,14 +206,14 @@ export function WarehouseOrdersView({ user, employeeHome = false }) {
   const detail = data?.orders.find((order) => order.id === detailId);
   const beginStatus = (order, status, item = null) => {
     if (isEmployee && (!operationalStates.includes(status) || order.status === "draft")) return;
-    setDetailId(null); setUpdateError(""); setConfirmation({ order, status, item });
+    setDetailId(null); setUpdateError(""); setLiquidAllocations({}); setConfirmation({ order, status, item });
   };
   const changeStatus = async () => {
     if (updatingRef.current) return;
     updatingRef.current = true; setUpdating(true); setUpdateError("");
     try {
       const path = confirmation.item ? `/warehouse/orders/${confirmation.order.id}/items/${confirmation.item.id}/status` : `/warehouse/orders/${confirmation.order.id}/status`;
-      const { data: updated } = await api.patch(path, { status: confirmation.status, expectedVersion: confirmation.order.version });
+      const { data: updated } = await api.patch(path, { status: confirmation.status, expectedVersion: confirmation.order.version, liquidAllocations: Object.fromEntries(Object.entries(liquidAllocations).map(([id, rows]) => [id, Object.entries(rows).filter(([,liters])=>Number(liters)>0).map(([containerId,liters])=>({containerId:Number(containerId),liters:Number(liters)}))])) });
       replaceOrder(updated);
       const returnToDetail = confirmation.item ? confirmation.order.id : null;
       setConfirmation(null); setDetailId(returnToDetail);
@@ -245,7 +246,7 @@ export function WarehouseOrdersView({ user, employeeHome = false }) {
     {detail && <WarehouseModal title={`Pedido #${detail.id}`} onClose={() => setDetailId(null)}>
       <div className="flex flex-wrap justify-between gap-3 mb-4"><div><p className="font-black break-words">{detail.customerName || "Sin cliente"} {detail.customerLastName}</p>{!isEmployee && <><p className="text-sm mt-1 break-words">{detail.customerPhone || "Sin teléfono registrado"}</p><p className="text-sm break-words">{detail.customerAddress || "Sin dirección registrada"}</p></>}</div><div><Status status={detail.status} /><p className="text-xs text-foreground/60 mt-2">Creado: {date(detail.createdAt)}</p>{detail.deliveredAt && <p className="text-xs text-foreground/60">Entregado: {date(detail.deliveredAt)}</p>}</div></div>
       <p className="text-sm text-foreground/60 mb-3">{["confirmed", "preparing", "ready"].includes(detail.status) ? "Disponibilidad informativa asignada por orden de registro, sin reservar stock físico." : detail.status === "dispatched" || detail.status === "delivered" ? "El stock de este pedido ya se descontó al despachar." : "Este pedido no genera demanda de producción."}</p>
-      <div className="space-y-3">{detail.items.map((item) => <div key={item.id} className="bg-background rounded-xl p-3 text-sm"><p className="font-bold break-words">{item.productName}</p><div className="flex flex-wrap items-center gap-3 mt-2"><Status status={item.status} /><select aria-label={`Estado de ${item.productName}`} className="rounded-lg border border-foreground/15 bg-surface px-2 py-1.5 text-sm max-w-full" value={item.status} disabled={updating || Boolean(error) || !["confirmed", "preparing", "ready"].includes(detail.status)} onChange={(event) => beginStatus(detail, event.target.value, item)}>{operationalStates.map((state) => <option key={state} value={state} disabled={["dispatched", "delivered"].includes(state)}>{labels[state]}</option>)}</select></div><p className="mt-1">Solicitado: <strong>{number(item.quantity)} u.</strong></p>{item.assignedStock != null ? <div className="mt-1"><p>Stock físico: {number(item.availableStock)} u. · Asignable a este pedido: {number(item.assignedStock)} u.</p><p className={item.toProduce ? "text-primary font-bold" : "text-success"}>Producción necesaria: {number(item.toProduce)} u.</p></div> : <p className="text-foreground/60 mt-1">Stock actual: {number(data.products.find((row) => row.id === item.productId)?.stock || 0)} u.</p>}</div>)}</div>
+      <div className="space-y-3">{detail.items.map((item) => <div key={item.id} className="bg-background rounded-xl p-3 text-sm"><p className="font-bold break-words">{item.productName}</p><div className="flex flex-wrap items-center gap-3 mt-2"><Status status={item.status} /><select aria-label={`Estado de ${item.productName}`} className="rounded-lg border border-foreground/15 bg-surface px-2 py-1.5 text-sm max-w-full" value={item.status} disabled={updating || Boolean(error) || !["confirmed", "preparing", "ready"].includes(detail.status)} onChange={(event) => beginStatus(detail, event.target.value, item)}>{operationalStates.map((state) => <option key={state} value={state} disabled={["dispatched", "delivered"].includes(state)}>{labels[state]}</option>)}</select></div><p className="mt-1">Solicitado: <strong>{number(item.quantity)} {item.unit || "u."}</strong></p>{item.assignedStock != null ? <div className="mt-1"><p>Stock físico: {number(item.availableStock)} {item.unit || "u."} · Asignable a este pedido: {number(item.assignedStock)} {item.unit || "u."}</p><p className={item.toProduce ? "text-primary font-bold" : "text-success"}>Producción necesaria: {number(item.toProduce)} {item.unit || "u."}</p></div> : <p className="text-foreground/60 mt-1">Stock actual: {number(data.products.find((row) => row.id === item.productId)?.stock || 0)} {item.unit || "u."}</p>}</div>)}</div>
       {detail.observations && <p className="mt-4 text-sm break-words">Observaciones: {detail.observations}</p>}
       <div className="flex flex-wrap gap-2 mt-5">
         {!isEmployee && detail.status === "draft" && <button type="button" className={button} onClick={() => beginStatus(detail, "confirmed")}>Confirmar pedido</button>}
@@ -256,6 +257,7 @@ export function WarehouseOrdersView({ user, employeeHome = false }) {
     </WarehouseModal>}
     {confirmation && <WarehouseModal title={confirmation.item ? `Actualizar producto: ${labels[confirmation.status]}` : confirmation.status === "ready" ? "Marcar pedido como Listo" : confirmation.status === "preparing" ? "Volver a preparación" : confirmation.status === "cancelled" ? "Cancelar pedido" : confirmation.status === "delivered" ? "Confirmar entrega" : confirmation.status === "confirmed" ? "Confirmar pedido" : "Pasar a En envío"} onClose={() => setConfirmation(null)} busy={updating}>
       <p>Pedido #{confirmation.order.id} · {confirmation.order.customerName} {confirmation.order.customerLastName}</p><p className="mt-3 text-sm text-foreground/60">{confirmation.item ? `${confirmation.item.productName}: ${labels[confirmation.status]}. Este cambio no modifica el stock.${confirmation.status === "preparing" && confirmation.order.status === "ready" ? " El pedido volverá a En preparación." : ""}` : confirmation.status === "ready" ? "Todos los productos deben estar listos. Este cambio no mueve stock; el pedido quedará disponible para su envío." : confirmation.status === "preparing" ? "El pedido volverá a En preparación. No se modifica el stock ni la preparación individual de los productos." : confirmation.status === "cancelled" ? "El pedido dejará de generar demanda. Si ya fue despachado, su stock volverá al Galpón." : confirmation.status === "delivered" ? "La entrega quedará registrada con la fecha y hora actual de Argentina." : confirmation.status === "dispatched" ? "Se descontará el stock del Galpón. Es necesario disponer de todas las unidades del pedido." : "El pedido comenzará a formar parte de la demanda pendiente."}</p>
+      {confirmation.status === "dispatched" && confirmation.order.items.filter(item => item.liquidProductId).map(item => <section key={item.id} className="my-4 rounded-xl border border-foreground/10 p-3 space-y-2"><h3 className="font-bold">{item.productName} · asignar {number(item.quantity)} L</h3><p className="text-xs text-foreground/60">Elegí litros de cada envase en Galpón. En Local no está disponible para el envío.</p>{(data.products.find(p => p.id === item.productId)?.containers || []).filter(c=>c.location==='WAREHOUSE' && c.content>0).map(c=><label key={c.id} className="flex flex-wrap items-center gap-3 text-sm">{c.count} × {c.kind} · {number(c.content)} L disponibles<input type="number" min="0" max={c.content} step="0.001" disabled={updating} aria-label={'Litros de '+item.productName+' envase '+c.id} className="border border-foreground/15 rounded-lg bg-background p-2 w-28" value={liquidAllocations[item.id]?.[c.id] || ''} onChange={e=>setLiquidAllocations(prev=>({...prev,[item.id]:{...prev[item.id],[c.id]:e.target.value}}))}/></label>)}</section>)}
       {updateError && <p role="alert" className="text-primary mt-3">{updateError}</p>}
       <div className="flex justify-end flex-wrap gap-2 mt-5"><button type="button" className={secondary} disabled={updating} onClick={() => setConfirmation(null)}>Volver</button><button type="button" className={button} disabled={updating} onClick={changeStatus}>{updating ? "Actualizando…" : "Confirmar"}</button></div>
     </WarehouseModal>}

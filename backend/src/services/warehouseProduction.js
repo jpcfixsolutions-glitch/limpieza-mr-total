@@ -11,27 +11,30 @@ export function calculateWarehouseProduction(orders, inventory) {
   for (const order of pending) {
     allocations[order.id] = [];
     for (const item of order.items) {
+      const unit = stock.get(item.productId)?.unit || item.unit || 'u.';
+      const measure = value => unit === 'L' ? Math.round(value * 1000) / 1000 : value;
       const available = Math.max(0, remaining.get(item.productId) || 0);
       const assigned = Math.min(available, item.quantity);
-      remaining.set(item.productId, available - assigned);
+      const missing = measure(item.quantity - assigned);
+      remaining.set(item.productId, measure(available - assigned));
       const key = item.productId ?? `deleted:${item.productName}`;
       const row = demand.get(key) || {
         productId: item.productId, productName: stock.get(item.productId)?.name || item.productName,
-        demand: 0, stock: Number(stock.get(item.productId)?.stock || 0),
+        unit, demand: 0, stock: Number(stock.get(item.productId)?.stock || 0),
         orders: [], oldestOrderAt: null,
       };
-      row.demand += item.quantity;
-      if (item.quantity > assigned) {
+      row.demand = measure(row.demand + item.quantity);
+      if (missing > 0) {
         const source = row.orders.find((source) => source.id === order.id);
-        if (source) source.toProduce += item.quantity - assigned;
-        else row.orders.push({ id: order.id, createdAt: order.createdAt, toProduce: item.quantity - assigned });
+        if (source) source.toProduce = measure(source.toProduce + missing);
+        else row.orders.push({ id: order.id, createdAt: order.createdAt, toProduce: missing });
         if (!row.oldestOrderAt) row.oldestOrderAt = order.createdAt;
       }
       demand.set(key, row);
-      allocations[order.id].push({ ...item, availableStock: Number(stock.get(item.productId)?.stock || 0), assignedStock: assigned, toProduce: item.quantity - assigned });
+      allocations[order.id].push({ ...item, unit, availableStock: Number(stock.get(item.productId)?.stock || 0), assignedStock: assigned, toProduce: missing });
     }
   }
-  const items = [...demand.values()].map((row) => ({ ...row, toProduce: Math.max(0, row.demand - row.stock) }))
+  const items = [...demand.values()].map((row) => ({ ...row, toProduce: Math.max(0, row.unit === 'L' ? Math.round((row.demand - row.stock) * 1000) / 1000 : row.demand - row.stock) }))
     .filter((row) => row.toProduce > 0).sort((a, b) => a.productName.localeCompare(b.productName, "es-AR"));
-  return { items, totalUnits: items.reduce((sum, item) => sum + item.toProduce, 0), allocations };
+  return { items, totalUnits: items.filter(item => item.unit !== "L").reduce((sum, item) => sum + item.toProduce, 0), totalLiters: Math.round(items.filter(item => item.unit === "L").reduce((sum, item) => sum + item.toProduce, 0) * 1000) / 1000, allocations };
 }

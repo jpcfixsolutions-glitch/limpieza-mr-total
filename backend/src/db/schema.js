@@ -428,6 +428,7 @@ export const warehouseOrders = sqliteTable("warehouse_orders", {
 ]);
 
 export const warehouseOrderItems = sqliteTable("warehouse_order_items", {
+  liquidProductId: integer("liquid_product_id").references(() => warehouseLiquidProducts.id),
   id: integer("id").primaryKey({ autoIncrement: true }),
   orderId: integer("order_id").notNull().references(() => warehouseOrders.id, { onDelete: "cascade" }),
   productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
@@ -517,4 +518,33 @@ export const warehouseSettingsAudit = sqliteTable('warehouse_settings_audit', {
   id:integer('id').primaryKey({autoIncrement:true}),businessUnitId:integer('business_unit_id').notNull().references(()=>businessUnits.id),
   entity:text('entity').notNull(),entityId:integer('entity_id').notNull(),snapshot:text('snapshot').notNull(),
   userId:integer('user_id').references(()=>users.id),createdAt:text('created_at').notNull(),
+});
+
+export const warehouseLiquidProducts = sqliteTable('warehouse_liquid_products', {
+  id: integer('id').primaryKey({ autoIncrement: true }), name: text('name').notNull(), barcode: text('barcode'),
+  category: text('category').notNull().default(''), cost: real('cost').notNull().default(0), price: real('price').notNull().default(0),
+  minStockMl: integer('min_stock_ml').notNull().default(0), version: integer('version').notNull().default(0),
+  archived: integer('archived', { mode: 'boolean' }).notNull().default(false), createdAt: text('created_at').default(sql`(datetime('now'))`),
+});
+export const warehouseLiquidContainers = sqliteTable('warehouse_liquid_containers', {
+  id: integer('id').primaryKey({ autoIncrement: true }), productId: integer('product_id').notNull().references(() => warehouseLiquidProducts.id),
+  kind: text('kind').notNull(), capacityMl: integer('capacity_ml').notNull(), count: integer('count').notNull(),
+  contentMl: integer('content_ml').notNull(), location: text('location').notNull(),
+});
+export const warehouseLiquidMovements = sqliteTable('warehouse_liquid_movements', {
+  id: integer('id').primaryKey({ autoIncrement: true }), productId: integer('product_id').notNull().references(() => warehouseLiquidProducts.id),
+  userId: integer('user_id').references(() => users.id), operation: text('operation').notNull(), beforeJson: text('before_json').notNull(),
+  afterJson: text('after_json').notNull(), notes: text('notes').notNull(), idempotencyKey: text('idempotency_key').notNull().unique(),
+  requestJson: text('request_json').notNull(), createdAt: text('created_at').default(sql`(datetime('now'))`),
+});
+
+export const warehouseStockOptions = sqliteTable('warehouse_stock_options', {
+  id: integer('id').primaryKey({autoIncrement:true}), businessUnitId: integer('business_unit_id').notNull().references(()=>businessUnits.id),
+  type: text('type').notNull(), name: text('name').notNull(), nameKey: text('name_key').notNull(),
+  active: integer('active',{mode:'boolean'}).notNull().default(true), version: integer('version').notNull().default(0),
+});
+export const warehouseStockOptionsAudit = sqliteTable('warehouse_stock_options_audit', {
+  id: integer('id').primaryKey({autoIncrement:true}), optionId: integer('option_id').notNull().references(()=>warehouseStockOptions.id),
+  userId: integer('user_id').notNull().references(()=>users.id), beforeJson: text('before_json').notNull(), afterJson: text('after_json').notNull(),
+  createdAt: text('created_at').default(sql`(datetime('now'))`),
 });
