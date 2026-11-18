@@ -73,7 +73,7 @@ function buildClosedRegisterSummary(
   }
 
   const totalGastosEfectivo = dailyExpenses
-    .filter((e) => e.method === "efectivo")
+    .filter((e) => e.status === 'paid' && e.method === "efectivo")
     .reduce((sum, e) => sum + e.amount, 0);
 
   const calculatedCashBalance = round2(register.initialCash + totalEfectivo - totalGastosEfectivo);
@@ -83,9 +83,11 @@ function buildClosedRegisterSummary(
     openedAt: register.openedAt,
     closedAt: register.closedAt,
     initialCash: register.initialCash,
-    expectedCash: register.expectedCash !== null && register.expectedCash !== undefined ? register.expectedCash : calculatedCashBalance,
+    expectedCash: calculatedCashBalance,
+    recordedExpectedCash: register.expectedCash ?? null,
     countedCash: register.countedCash ?? null,
-    cashDifference: register.cashDifference ?? null,
+    cashDifference: register.countedCash == null ? null : round2(register.countedCash-calculatedCashBalance),
+    recordedCashDifference: register.cashDifference ?? null,
     arqueoNotes: register.arqueoNotes ?? null,
     nextInitialCash: register.nextInitialCash ?? null,
     transactionsCount: txs.length,
@@ -106,6 +108,7 @@ function buildClosedRegisterSummary(
       amount: e.amount,
       method: e.method,
       createdAt: e.createdAt,
+      status:e.status,paidAt:e.paidAt,period:e.period,paymentRegisterId:e.paymentRegisterId,
     })),
     totalGastosEfectivo,
     cashBalance: calculatedCashBalance,
@@ -192,7 +195,7 @@ export const CashRegisterService = {
       cobrosEfectivo;
 
     const totalGastosEfectivo = dailyExpenses
-      .filter((e) => e.method === "efectivo")
+      .filter((e) => e.status === 'paid' && e.method === "efectivo")
       .reduce((sum, e) => sum + e.amount, 0);
 
     const expectedCash = round2(register.initialCash + totalEfectivo - totalGastosEfectivo);
@@ -225,7 +228,7 @@ export const CashRegisterService = {
     const txsByRegister = groupBy(data.txs, "registerId");
     const paymentsByTransaction = groupBy(data.payments, "transactionId");
     const itemsByTransaction = groupBy(data.items, "transactionId");
-    const expensesByRegister = groupBy(data.expenses, "registerId");
+    const expensesByRegister = groupBy(data.expenses, "paymentRegisterId");
     const accountPaymentsByRegister = groupBy(data.accountPayments, "registerId");
     const result = [];
 

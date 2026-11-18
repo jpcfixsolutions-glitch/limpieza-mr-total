@@ -294,7 +294,7 @@ export function ConfiguracionView() {
     if (!expense.name.trim()) { toast.error("La descripción del gasto es obligatoria"); return; }
     if (submitting) return;
     setSubmitting(true);
-    const payload = { ...expense, amount: Number(expense.amount) || 0 };
+    const payload = { ...expense, amount: Number(expense.amount) || 0, expectedVersion:expense.version };
     try {
       if (expense.id && expenses.some((e) => e.id === expense.id)) {
         await api.put(`/fixed-expenses/${expense.id}`, payload);
@@ -315,7 +315,7 @@ export function ConfiguracionView() {
   const handleRemoveExpense = async (id) => {
     try {
       await api.delete(`/fixed-expenses/${id}`);
-      toast.success("Gasto eliminado");
+      toast.success("Recurrencia desactivada. Los períodos anteriores se conservan.");
       setDeleteExpenseConfirm(null);
       fetchData();
     } catch (err) { toast.error(err.response?.data?.message || "Error"); }
@@ -591,7 +591,7 @@ export function ConfiguracionView() {
               <div className="bg-primary/10 border border-primary/30 rounded-xl p-4 flex gap-3">
                 <AlertTriangle size={18} className="text-primary shrink-0 mt-0.5" />
                 <p className="text-foreground/80 font-medium text-sm">
-                  Esta acción afectará las métricas de <span className="font-bold">Estadísticas</span>: el total de Gastos Operativos, el Balance Neto y la Liquidez Disponible se recalcularán sin este gasto.
+                  Se desactivará la recurrencia mensual. Las obligaciones y los pagos ya registrados se conservan. Gestioná sus estados en Inicio o Estadísticas → Gastos del Local.
                 </p>
               </div>
             </div>

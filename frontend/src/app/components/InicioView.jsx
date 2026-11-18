@@ -1,3 +1,5 @@
+import { LocalExpensesPanel } from './LocalExpensesPanel.jsx';
+import { cashExpensesForRegister, sumExpenses } from '../../utils/localExpenses.js';
 import { useState, useEffect } from "react";
 import { TrendingUp, Activity, Clock, Lock, Unlock, Receipt, Package, Wallet, BookUp, PackageMinus, X, Printer } from "lucide-react";
 import { toast } from "sonner";
@@ -16,6 +18,10 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [showClosureModal, setShowClosureModal] = useState(false);
   const [expenses, setExpenses] = useState([]);
+  const [showExpenses,setShowExpenses]=useState(false);
+  useEffect(()=>{if(showExpenses)document.getElementById('local-home-expenses')?.scrollIntoView({behavior:'smooth',block:'start'});},[showExpenses]);
+  const [expenseRevision,setExpenseRevision]=useState(0);
+  useEffect(()=>{const update=()=>setExpenseRevision(n=>n+1);window.addEventListener('local-expenses-changed',update);return()=>window.removeEventListener('local-expenses-changed',update);},[]);
   const [systemLog, setSystemLog] = useState([]);
   const [products, setProducts] = useState([]);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
@@ -51,7 +57,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
   useEffect(() => {
     setLoading(true);
     Promise.allSettled([
-      api.get("/fixed-expenses"),
+      api.get("/daily-expenses"),
       api.get("/stats/activity-log"),
       api.get("/products")
     ])
@@ -61,7 +67,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
         if (rProd.status === "fulfilled") setProducts(rProd.value.data.sort((a, b) => (a.name || "").localeCompare(b.name || "")));
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [expenseRevision]);
 
   useEffect(() => {
     if (isCajaOpen) {
@@ -71,9 +77,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
             setRegisterData(r.data.register);
             api.get("/daily-expenses")
               .then((eRes) => {
-                const total = eRes.data
-                  .filter((g) => g.registerId === r.data.register.id && g.method === "efectivo")
-                  .reduce((sum, g) => sum + Number(g.amount), 0);
+                const total = cashExpensesForRegister(eRes.data,r.data.register.id);
                 setGastosEfectivo(total);
               })
               .catch(() => setGastosEfectivo(0));
@@ -89,7 +93,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
       setGastosEfectivo(0);
       setCobrosCuenta([]);
     }
-  }, [isCajaOpen, transactions]);
+  }, [isCajaOpen, transactions,expenseRevision]);
 
   const isAccount = (method) => String(method || "").trim().toLowerCase() === ACCOUNT_METHOD_NAME.toLowerCase();
   const isCash = (method) => String(method || "").toLowerCase().includes("efectivo");
@@ -130,7 +134,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
   });
 
   const ventasHoy = isCajaOpen ? transactions.reduce((sum, t) => sum + t.total, 0) : 0;
-  const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
+  const totalExpenses = sumExpenses(expenses.filter(e=>e.status==='pending'));
 
   const handleConfirmOpen = async (amount) => {
     try {
@@ -313,7 +317,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
           <div className="bg-surface rounded-xl border border-foreground/15 p-6 flex flex-col shadow-sm" style={{ height: "420px" }}>
             <div className="flex items-center gap-3 mb-6 shrink-0">
               <Receipt className="text-primary" size={24} />
-              <h2 className="text-primary text-xl font-bold">Gastos Fijos</h2>
+              <h2 className="text-primary text-xl font-bold">Gastos del Local</h2><button type="button" className="ml-auto text-sm font-bold underline" onClick={()=>setShowExpenses(true)}>Gestionar</button>
             </div>
             <div className="overflow-y-auto flex-1 space-y-4">
               {expenses.length === 0 ? (
@@ -321,7 +325,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
               ) : (
                 expenses.map((expense) => (
                   <div key={expense.id} className="flex items-center justify-between">
-                    <span className="text-foreground/80 font-medium">{expense.name}</span>
+                    <span className="text-foreground/80 font-medium">{expense.reason} · {expense.status==='paid'?'Pagado':'Pendiente'}</span>
                     <span className="text-foreground font-bold">${expense.amount.toLocaleString()}</span>
                   </div>
                 ))
@@ -329,7 +333,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
             </div>
             <div className="mt-auto pt-6 border-t border-foreground/15 shrink-0">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-foreground/80 font-medium">Total a cubrir:</span>
+                <span className="text-foreground/80 font-medium">Pendientes de pago:</span>
                 <span className="text-foreground font-black">${totalExpenses.toLocaleString()}</span>
               </div>
             </div>
@@ -473,6 +477,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
           onPrintA4={startA4Print}
         />
       )}
+      {showExpenses&&<section id="local-home-expenses" className="mt-6 scroll-mt-6"><button className="mb-3 text-sm font-bold underline" onClick={()=>setShowExpenses(false)}>Cerrar gestión de gastos</button><LocalExpensesPanel onChange={setExpenses}/></section>}
       <SaleTicket transaction={printJob?.format === "thermal" ? printJob.transaction : null} />
       <A4SaleDocument transaction={printJob?.format === "a4" ? printJob.transaction : null} />
     </div>

@@ -31,10 +31,10 @@ router.put('/liquids/:id', liquidAction(req => WarehouseLiquidsService.save(req.
 router.delete('/liquids/:id', adminOnly, liquidAction(req => WarehouseLiquidsService.archive(req.params.id, req.body, req.user.id, req.businessUnit)));
 router.get('/liquids/:id/history', adminOnly, liquidAction(req => WarehouseLiquidsService.history(req.params.id, req.businessUnit)));
 router.get("/operations", WarehouseController.operations);
-router.post("/production-preview", adminOnly, WarehouseController.productionPreview);
-router.post("/customers", adminOnly, WarehouseController.createCustomer);
+router.post("/production-preview", WarehouseController.productionPreview);
+router.post("/customers", WarehouseController.createCustomer);
 router.get("/orders", WarehouseController.listOrders);
-router.post("/orders", adminOnly, WarehouseController.createOrder);
+router.post("/orders", WarehouseController.createOrder);
 router.put("/orders/:id", adminOnly, WarehouseController.updateOrder);
 router.patch("/orders/:id/status", WarehouseController.changeOrderStatus);
 router.patch("/orders/:id/items/:itemId/status", WarehouseController.changeItemStatus);
@@ -45,6 +45,7 @@ router.patch("/purchases/:id/status", adminOnly, WarehouseController.changePurch
 router.get("/stats", adminOnly, WarehouseController.stats);
 router.get("/activity/:date", adminOnly, WarehouseController.activity);
 router.post("/expenses", adminOnly, WarehouseController.expense);
+router.patch('/expenses/:id/status', adminOnly, WarehouseController.expenseStatus);
 router.put("/expenses/:id", adminOnly, WarehouseController.expense);
 router.delete("/expenses/:id", adminOnly, WarehouseController.expense);
 router.post("/orders/:id/receipts", adminOnly, WarehouseController.receipt);

@@ -1,6 +1,7 @@
 ﻿import { sql } from "drizzle-orm";
 import { getArgentinaTime } from "../db/timeUtils.js";
 import { runWarehouseTransaction } from "./warehouse.service.js";
+import { changeExpensePayment } from './warehouseExpensePayments.js';
 
 export const fail = (status, message) => { throw { status, message }; };
 export function assertWarehouse(unit) { if (unit?.code !== 'WAREHOUSE') fail(403, 'Esta operación pertenece al Galpón.'); }
@@ -34,8 +35,16 @@ export async function materializeFixed(tx, unitId, through = getArgentinaTime().
   for (const config of configs) {
     let due = config.next_due;
     while (due <= through) {
-      await tx.run(sql`INSERT OR IGNORE INTO warehouse_fixed_occurrences(business_unit_id,fixed_expense_id,due_date,concept,description,amount_cents)
-        VALUES(${unitId},${config.id},${due},${config.name},${config.description},${config.amount_cents})`);
+      const now = getArgentinaTime().datetime;
+      await tx.run(sql`INSERT OR IGNORE INTO warehouse_fixed_occurrences(business_unit_id,fixed_expense_id,due_date,concept,description,amount_cents,created_at)
+        VALUES(${unitId},${config.id},${due},${config.name},${config.description},${config.amount_cents},${now})`);
+      const [occurrence] = await tx.all(sql`SELECT * FROM warehouse_fixed_occurrences WHERE fixed_expense_id=${config.id} AND due_date=${due}`);
+      if (!occurrence.expense_id) {
+        const [expense] = await tx.all(sql`INSERT INTO warehouse_expenses(business_unit_id,concept,description,amount_cents,method,occurred_at,user_id,idempotency_key,created_at,updated_at,status_changed_at)
+          VALUES(${unitId},${occurrence.concept},${occurrence.description},${occurrence.amount_cents},'cash',${due+' 00:00:00'},NULL,${'fixed:'+occurrence.id},${now},${now},${now}) RETURNING *`);
+        await tx.run(sql`UPDATE warehouse_fixed_occurrences SET expense_id=${expense.id} WHERE id=${occurrence.id}`);
+        await tx.run(sql`INSERT INTO warehouse_expense_audit(expense_id,action,snapshot,user_id,created_at) VALUES(${expense.id},'create',${JSON.stringify({before:null,after:expense})},NULL,${now})`);
+      }
       due = nextDue(due, config.frequency, config.due_day, true);
     }
     await tx.run(sql`UPDATE warehouse_fixed_expenses SET next_due=${due} WHERE id=${config.id}`);
@@ -128,20 +137,10 @@ export const WarehouseSettingsService = {
   },
   async settle(unit, id, data, userId) {
     assertWarehouse(unit);
-    if (!['cash','transfer'].includes(data.method)) fail(400,'Seleccioná efectivo o transferencia.');
-    const date = validDate(data.date);
-    if (date>getArgentinaTime().datetime.slice(0,10)) fail(400,'El pago no puede tener fecha futura.');
     return runWarehouseTransaction(async tx=>{
       const [occurrence] = await tx.all(sql`SELECT * FROM warehouse_fixed_occurrences WHERE id=${Number(id)} AND business_unit_id=${unit.id}`);
       if (!occurrence) fail(404,'Vencimiento no encontrado.');
-      if (occurrence.expense_id) return { id: occurrence.expense_id, duplicated: true };
-      if (date<occurrence.due_date) fail(400,'La fecha de pago no puede ser anterior al vencimiento.');
-      const now = getArgentinaTime().datetime;
-      const [expense] = await tx.all(sql`INSERT INTO warehouse_expenses(business_unit_id,concept,description,amount_cents,method,occurred_at,user_id,idempotency_key,created_at,updated_at)
-        VALUES(${unit.id},${occurrence.concept},${occurrence.description},${occurrence.amount_cents},${data.method},${date+' 12:00:00'},${userId},${'fixed:'+occurrence.id},${now},${now}) RETURNING *`);
-      await tx.run(sql`UPDATE warehouse_fixed_occurrences SET expense_id=${expense.id} WHERE id=${occurrence.id}`);
-      await tx.run(sql`INSERT INTO warehouse_expense_audit(expense_id,action,snapshot,user_id,created_at) VALUES(${expense.id},'create',${JSON.stringify({before:null,after:expense})},${userId},${now})`);
-      return expense;
+      return changeExpensePayment(tx,unit.id,occurrence.expense_id,{...data,status:'paid'},userId);
     });
   },
 };

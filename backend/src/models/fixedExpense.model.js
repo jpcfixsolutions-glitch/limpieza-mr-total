@@ -4,7 +4,7 @@ import { fixedExpenses } from "../db/schema.js";
 
 export const FixedExpenseModel = {
   findAll() {
-    return db.select().from(fixedExpenses);
+    return db.select().from(fixedExpenses).where(eq(fixedExpenses.active, 1));
   },
 
   findById(id) {

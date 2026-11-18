@@ -1,4 +1,4 @@
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { dailyExpenses } from "../db/schema.js";
 
@@ -11,7 +11,7 @@ export const DailyExpenseModel = {
     return db
       .select()
       .from(dailyExpenses)
-      .where(eq(dailyExpenses.registerId, registerId))
+      .where(and(eq(dailyExpenses.paymentRegisterId, registerId), eq(dailyExpenses.status,'paid')))
       .orderBy(desc(dailyExpenses.createdAt));
   },
 

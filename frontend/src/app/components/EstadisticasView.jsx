@@ -6,6 +6,8 @@ import { summarizeCatalogProfitability } from "../../utils/price.js";
 import { Loader } from "./Loader.jsx";
 import { DailyExpenseModal } from "./DailyExpenseModal.jsx";
 import { ProductExtractionHistoryModal } from "./ProductExtractionHistoryModal.jsx";
+import { LocalExpensesPanel } from './LocalExpensesPanel.jsx';
+import { paidExpensesInRange, sumExpenses } from '../../utils/localExpenses.js';
 
 // Formateador de fecha en hora Argentina
 const arFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
@@ -16,18 +18,18 @@ function hoyAR() {
 
 // Lunes de la semana de una fecha "YYYY-MM-DD"
 function getMondayOf(dateStr) {
-  const d = new Date(dateStr + "T12:00:00");
-  const day = d.getDay(); // 0=Dom
+  const d = new Date(dateStr + "T12:00:00Z");
+  const day = d.getUTCDay(); // 0=Dom
   const diff = day === 0 ? 6 : day - 1;
-  d.setDate(d.getDate() - diff);
-  return arFmt.format(d);
+  d.setUTCDate(d.getUTCDate() - diff);
+  return d.toISOString().slice(0,10);
 }
 
 // Domingo de la semana a partir del lunes "YYYY-MM-DD"
 function getSundayOf(mondayStr) {
-  const d = new Date(mondayStr + "T12:00:00");
-  d.setDate(d.getDate() + 6);
-  return arFmt.format(d);
+  const d = new Date(mondayStr + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + 6);
+  return d.toISOString().slice(0,10);
 }
 
 // "YYYY-MM-DD" → "DD/MM"
@@ -68,7 +70,7 @@ export function EstadisticasView() {
   const fetchStats = async () => {
     setLoading(true);
     try {
-      const periodFrom = period === "semanal" ? getMondayOf(hoyAR()) : period === "mensual" ? `${hoyAR().slice(0, 8)}01` : undefined;
+      const periodFrom = period === 'diario' ? hoyAR() : period === "semanal" ? getMondayOf(hoyAR()) : period === "mensual" ? `${hoyAR().slice(0, 8)}01` : undefined;
       const periodTo = hoyAR();
       const [rCajas, rFijos, rDiarios, rProd, rRestock, rLog, rExtractions, rTopProducts] = await Promise.allSettled([
         api.get("/cash-register/closed"),
@@ -93,7 +95,10 @@ export function EstadisticasView() {
     }
   };
 
-  useEffect(() => { fetchStats(); }, [period]);
+  useEffect(() => {
+    fetchStats();window.addEventListener('local-expenses-changed',fetchStats);
+    return()=>window.removeEventListener('local-expenses-changed',fetchStats);
+  }, [period]);
 
   const handleDailyExpense = async (expenseData) => {
     try {
@@ -112,7 +117,7 @@ export function EstadisticasView() {
   const semanaInicio = getMondayOf(today);               // lunes de esta semana
   const mesInicio    = today.slice(0, 8) + "01";         // 1° del mes actual
 
-  const periodCutoff = period === "semanal" ? semanaInicio
+  const periodCutoff = period === 'diario' ? today : period === "semanal" ? semanaInicio
                      : period === "mensual" ? mesInicio
                      : null; // "todo" = sin filtro
 
@@ -132,13 +137,10 @@ export function EstadisticasView() {
   const virtual  = cajasFiltradas.reduce((s, c) => s + (c.totalTransferencia|| 0), 0);
 
   // ── Gastos filtrados ──────────────────────────────────────────────────────
-  const gastosDiariosFiltrados = gastosDiarios.filter((g) => {
-    if (!g.createdAt) return false;
-    return periodCutoff ? g.createdAt.slice(0, 10) >= periodCutoff : true;
-  });
+  const gastosDiariosFiltrados = paidExpensesInRange(gastosDiarios,periodCutoff,today);
 
-  const totalFijos           = gastosFijos.reduce((s, g) => s + (Number(g.amount) || 0), 0);
-  const totalDiarios         = gastosDiariosFiltrados.reduce((s, g) => s + (Number(g.amount) || 0), 0);
+  const totalFijos           = sumExpenses(gastosDiariosFiltrados.filter(g=>g.fixedExpenseId));
+  const totalDiarios         = sumExpenses(gastosDiariosFiltrados.filter(g=>!g.fixedExpenseId));
   const totalGastosOperativos = totalFijos + totalDiarios;
   const invertidoStock       = productos.reduce((s, p) => s + ((Number(p.cost)||0) * (Number(p.stock)||0)), 0);
   const profitabilitySummary = summarizeCatalogProfitability(productos);
@@ -166,11 +168,12 @@ export function EstadisticasView() {
       map[k].virtual  += Number(c.totalTransferencia) || 0;
       map[k].cajas    += 1;
     });
+    gastosDiariosFiltrados.forEach(g=>{const k=g.paidAt.slice(0,7);if(!map[k])map[k]={ingresos:0,efectivo:0,virtual:0,cajas:0};map[k].gastos=(map[k].gastos||0)+Number(g.amount);});
     return Object.keys(map).sort().reverse().map((k) => ({
       key: k,
       label: MONTH_NAMES_LONG[parseInt(k.slice(5,7))-1] + " " + k.slice(0,4),
       isCurrent: k === today.slice(0,7),
-      ...map[k],
+      ...map[k], gastos:map[k].gastos||0, balance:map[k].ingresos-(map[k].gastos||0),
     }));
   })();
 
@@ -186,11 +189,12 @@ export function EstadisticasView() {
       map[monday].virtual  += Number(c.totalTransferencia) || 0;
       map[monday].cajas    += 1;
     });
+    gastosDiariosFiltrados.forEach(g=>{const k=getMondayOf(g.paidAt.slice(0,10));if(!map[k])map[k]={ingresos:0,efectivo:0,virtual:0,cajas:0};map[k].gastos=(map[k].gastos||0)+Number(g.amount);});
     return Object.keys(map).sort().reverse().map((monday) => ({
       key: monday,
       label: fmtDDMM(monday) + " – " + fmtDDMM(getSundayOf(monday)),
       isCurrent: monday === semanaInicio,
-      ...map[monday],
+      ...map[monday], gastos:map[monday].gastos||0, balance:map[monday].ingresos-(map[monday].gastos||0),
     }));
   })();
 
@@ -199,7 +203,7 @@ export function EstadisticasView() {
   const balanceNeto     = revenue - totalEgresosBalance;
   const margenPorcentaje = revenue > 0 ? (balanceNeto / revenue) * 100 : 0;
   const monto = (value, cls = "") => <span className={cls}>${value}</span>;
-  const PERIOD_LABELS   = { todo:"Todo", mensual:"Mensual", semanal:"Semanal" };
+  const PERIOD_LABELS   = { diario:'Hoy', todo:"Todo", mensual:"Mensual", semanal:"Semanal" };
   const PAGE_LABELS = {
     finances: { title: "Finanzas", description: "Ingresos, gastos, restock y balance" },
     profitability: { title: "Rentabilidad", description: "Rendimiento del catálogo y productos estrella" },
@@ -231,7 +235,7 @@ export function EstadisticasView() {
             ))}
           </div>
           <div className="bg-surface p-1 rounded-xl border border-foreground/15 shadow-sm flex gap-1 overflow-x-auto max-w-full">
-            {["semanal","mensual","todo"].map((p) => (
+            {["diario","semanal","mensual","todo"].map((p) => (
               <button key={p} onClick={() => setPeriod(p)}
                 className={`px-4 md:px-6 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all shadow-sm ${period === p ? "bg-secondary text-foreground" : "bg-transparent text-foreground/70 hover:text-foreground"}`}>
                 {PERIOD_LABELS[p]}
@@ -344,7 +348,7 @@ export function EstadisticasView() {
           <div className="flex items-center justify-between gap-3 mb-4 text-foreground">
             <div className="flex items-center gap-3">
               <TrendingDown size={20}/>
-              <h3 className="text-foreground/80 font-bold">Gastos Operativos</h3>
+              <h3 className="text-foreground/80 font-bold">Gastos efectivamente pagados</h3>
             </div>
             <button
               onClick={() => setShowExpenseModal(true)}
@@ -356,40 +360,7 @@ export function EstadisticasView() {
             </button>
           </div>
           <p className="text-3xl font-black mb-4">{monto(totalGastosOperativos.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}),"text-foreground")}</p>
-          <div className="border-t border-foreground/15 pt-4 mt-auto">
-            <p className="text-xs text-foreground/70 mb-3 uppercase tracking-wider font-bold">Detalle de Gastos</p>
-            <div className="space-y-3 max-h-32 overflow-y-auto pr-2">
-              {gastosFijos.length===0 && gastosDiariosFiltrados.length===0 && (
-                <p className="text-foreground/60 font-medium text-sm">Sin gastos en este período</p>
-              )}
-              {gastosFijos.map((g) => (
-                <div key={`fijo-${g.id}`} className="flex justify-between items-center text-sm p-2.5 bg-background rounded-lg border border-foreground/15 shadow-sm">
-                  <div className="flex items-center gap-2 truncate pr-2">
-                    <span className="shrink-0 text-[10px] font-black uppercase tracking-wide bg-primary/10 text-foreground px-1.5 py-0.5 rounded">Fijo</span>
-                    <div className="flex flex-col truncate">
-                      <span className="text-foreground truncate font-bold">{g.name}</span>
-                      <span className="text-xs text-foreground/60 font-medium">Recurrente mensual</span>
-                    </div>
-                  </div>
-                  <span className="text-foreground font-black shrink-0">-${Number(g.amount).toFixed(2)}</span>
-                </div>
-              ))}
-              {gastosDiariosFiltrados.map((g) => (
-                <div key={`diario-${g.id}`} className="flex justify-between items-center text-sm p-2.5 bg-background rounded-lg border border-foreground/15 shadow-sm">
-                  <div className="flex items-center gap-2 truncate pr-2">
-                    <span className="shrink-0 text-[10px] font-black uppercase tracking-wide bg-primary/20 text-primary px-1.5 py-0.5 rounded">Extracción</span>
-                    <div className="flex flex-col truncate">
-                      <span className="text-foreground truncate font-bold">{g.reason}</span>
-                      <span className="text-xs text-foreground/60 font-medium">
-                        {new Date(g.createdAt.replace(" ","T")).toLocaleDateString("es-AR")} • {new Date(g.createdAt.replace(" ","T")).toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit",hour12:false})}
-                      </span>
-                    </div>
-                  </div>
-                  <span className="text-foreground font-black shrink-0">-${Number(g.amount).toFixed(2)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <p className="text-sm text-foreground/60">Sólo pagos del período, por fecha efectiva de pago.</p><p className="text-sm mt-2">Fijos pagados: ${totalFijos.toFixed(2)} · Variables pagados: ${totalDiarios.toFixed(2)}</p>
         </div>
         <div className={`rounded-xl p-6 border flex flex-col shadow-sm lg:col-span-2 xl:col-span-1 ${balanceNeto>=0?"bg-surface border-success/30":"bg-surface border-red-400/30"}`}>
           <div className={`flex items-center gap-3 mb-2 ${balanceNeto>=0?"text-success":"text-red-600"}`}>
@@ -409,7 +380,7 @@ export function EstadisticasView() {
               <li><span className="text-red-500 font-black mr-2">−</span>Gastos fijos</li>
               <li><span className="text-red-500 font-black mr-2">−</span>Gasto de restock</li>
             </ul>
-            <p className="text-xs text-foreground/55 font-medium pt-1">Los gastos operativos incluyen las extracciones registradas.</p>
+            <p className="text-xs text-foreground/55 font-medium pt-1">Los gastos pendientes no se descuentan. Los pagos se imputan por su fecha efectiva.</p>
           </div>
           <div className={`border-t pt-4 mt-4 space-y-2 ${balanceNeto>=0?"border-success/20":"border-primary/20"}`}>
             <p className="text-xs text-foreground/70 uppercase tracking-wider font-bold mb-1">Liquidez Disponible</p>
@@ -426,6 +397,7 @@ export function EstadisticasView() {
       </div>
       </>}
 
+      {activePage === "finances" && <div className="mb-8"><LocalExpensesPanel onChange={setGastosDiarios}/></div>}
       {showExpenseModal && (
         <DailyExpenseModal
           onClose={() => setShowExpenseModal(false)}
@@ -489,7 +461,7 @@ export function EstadisticasView() {
                 <th className="text-right p-4 text-foreground/70 font-bold uppercase text-xs tracking-wide">Ingresos</th>
                 <th className="text-right p-4 text-foreground/70 font-bold uppercase text-xs tracking-wide">Efectivo</th>
                 <th className="text-right p-4 text-foreground/70 font-bold uppercase text-xs tracking-wide">Virtual</th>
-                <th className="text-right p-4 text-foreground/70 font-bold uppercase text-xs tracking-wide">Cierres</th>
+                <th className="text-right p-4 text-foreground/70 font-bold uppercase text-xs tracking-wide">Gastos pagados</th><th className="text-right p-4 text-foreground/70 font-bold uppercase text-xs tracking-wide">Ingresos − gastos</th><th className="text-right p-4 text-foreground/70 font-bold uppercase text-xs tracking-wide">Cierres</th>
                 <th className="p-4 w-10"/>
               </tr>
             </thead>
@@ -510,14 +482,14 @@ export function EstadisticasView() {
                     <td className="p-4 text-right text-foreground font-black">${row.ingresos.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                     <td className="p-4 text-right text-success font-bold">${row.efectivo.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                     <td className="p-4 text-right text-primary font-bold">${row.virtual.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
-                    <td className="p-4 text-right text-foreground/70 font-bold">{row.cajas}</td>
+                    <td className="p-4 text-right font-bold">${row.gastos.toFixed(2)}</td><td className="p-4 text-right font-bold">${row.balance.toFixed(2)}</td><td className="p-4 text-right text-foreground/70 font-bold">{row.cajas}</td>
                     <td className="p-4 text-center text-foreground/50">
                       {expandedHist===row.key ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
                     </td>
                   </tr>
                   {expandedHist===row.key && (
                     <tr key={`${row.key}-detail`} className="bg-background/40">
-                      <td colSpan={6} className="px-6 py-4">
+                      <td colSpan={8} className="px-6 py-4">
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                           <div className="bg-surface rounded-xl p-4 border border-foreground/15">
                             <p className="text-foreground/60 text-xs font-bold uppercase mb-1">Total ingresos</p>
@@ -545,7 +517,7 @@ export function EstadisticasView() {
                 </>
               ))}
               {(histTab==="mes" ? historicoPorMes : historicoPorSemana).length === 0 && (
-                <tr><td colSpan={6} className="p-8 text-center text-foreground/60 font-medium">No hay datos registrados aún.</td></tr>
+                <tr><td colSpan={8} className="p-8 text-center text-foreground/60 font-medium">No hay datos registrados aún.</td></tr>
               )}
             </tbody>
           </table>

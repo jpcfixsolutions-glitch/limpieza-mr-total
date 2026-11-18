@@ -5,6 +5,8 @@ import * as schema from "./schema.js";
 import { client } from "./client.js";
 import { warehouseSettingsMigration } from "./warehouseSettingsMigration.js";
 import { warehouseFinanceMigration } from "./warehouseFinanceMigration.js";
+import { warehouseExpenseStatesMigration } from "./warehouseExpenseStatesMigration.js";
+import { localExpenseStatesMigration } from './localExpenseStatesMigration.js';
 
 const MIGRATIONS_TABLE = "app_migrations";
 
@@ -465,7 +467,7 @@ const migrations = [
   },
 ];
 
-migrations.push(warehouseFinanceMigration, warehouseSettingsMigration, warehouseLiquidsMigration, warehouseStockOptionsMigration);
+migrations.push(warehouseFinanceMigration, warehouseSettingsMigration, warehouseLiquidsMigration, warehouseStockOptionsMigration, warehouseExpenseStatesMigration, localExpenseStatesMigration);
 
 function quoteIdentifier(identifier) {
   return `"${String(identifier).replaceAll('"', '""')}"`;

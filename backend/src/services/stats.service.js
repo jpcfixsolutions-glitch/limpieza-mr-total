@@ -320,9 +320,9 @@ export const StatsService = {
     for (const expense of dailyExpList) {
       logs.push({
         id: `expense-${expense.id}`,
-        type: "Extracción",
-        details: `${expense.reason} — $${Number(expense.amount).toFixed(2)} en ${expense.method}`,
-        date: expense.createdAt,
+        type: expense.status==='paid'?'Gasto pagado':'Gasto pendiente',
+        details: `${expense.reason} — $${Number(expense.amount).toFixed(2)} · ${expense.status==='paid'?expense.method:'sin salida de dinero'}`,
+        date: expense.status==='paid'?expense.paidAt:expense.createdAt,
         icon: "Wallet",
         color: "text-yellow-600",
         bg: "bg-yellow-50",

@@ -1,3 +1,5 @@
+import { cashExpensesForRegister } from '../../utils/localExpenses.js';
+import { LocalExpensesPanel } from './LocalExpensesPanel.jsx';
 import { useState, useEffect, useCallback, Fragment } from "react";
 import { Lock, Calendar, Clock, Unlock, Eye, EyeOff, Banknote, Calculator, FileText, CheckCircle2, TrendingUp, AlertTriangle, Printer } from "lucide-react";
 import { toast } from "sonner";
@@ -21,6 +23,8 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
   const [loading, setLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [gastosEfectivo, setGastosEfectivo] = useState(0);
+  const [expenseRevision,setExpenseRevision]=useState(0);
+  useEffect(()=>{const update=()=>setExpenseRevision(n=>n+1);window.addEventListener('local-expenses-changed',update);return()=>window.removeEventListener('local-expenses-changed',update);},[]);
   const [cobrosCuenta, setCobrosCuenta] = useState([]);
   const [showIngresos, setShowIngresos] = useState(false);
   const {
@@ -55,15 +59,13 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
     const controller = new AbortController();
     loadClosedRegisters(controller.signal);
     return () => controller.abort();
-  }, [role, isCajaOpen, loadClosedRegisters]);
+  }, [role, isCajaOpen, loadClosedRegisters,expenseRevision]);
 
   useEffect(() => {
     if (isCajaOpen && register?.id) {
       api.get("/daily-expenses")
         .then((r) => {
-          const total = r.data
-            .filter((g) => g.registerId === register.id && g.method === "efectivo")
-            .reduce((sum, g) => sum + Number(g.amount), 0);
+          const total = cashExpensesForRegister(r.data,register.id);
           setGastosEfectivo(total);
         })
         .catch(() => setGastosEfectivo(0));
@@ -75,7 +77,7 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
       setGastosEfectivo(0);
       setCobrosCuenta([]);
     }
-  }, [isCajaOpen, register?.id, transactions]);
+  }, [isCajaOpen, register?.id, transactions,expenseRevision]);
 
   const isAccount = (method) => String(method || "").trim().toLowerCase() === ACCOUNT_METHOD_NAME.toLowerCase();
   const isCash = (method) => String(method || "").toLowerCase().includes("efectivo");
@@ -610,6 +612,7 @@ export function CajaView({ role = "admin", isCajaOpen, register, onOpenCaja, onC
         </>
       )}
 
+      <div className="mt-6"><LocalExpensesPanel/></div>
       <ClosureModal
         isOpen={showClosureModal}
         onClose={() => setShowClosureModal(false)}

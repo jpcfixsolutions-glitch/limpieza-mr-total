@@ -18,6 +18,10 @@ before(async () => {
     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, password TEXT, role TEXT, created_at TEXT)",
     "CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT NOT NULL, cod_barra TEXT, category_id INTEGER, price_group_id INTEGER, pack_type_id INTEGER, cost REAL NOT NULL, price REAL NOT NULL, units_per_pack INTEGER, pack_price REAL, use_suggested_price INTEGER, suggested_price_percent REAL, stock INTEGER NOT NULL, min_stock INTEGER NOT NULL, icon TEXT, is_available INTEGER NOT NULL, created_at TEXT)",
     "CREATE TABLE cash_registers (id INTEGER PRIMARY KEY)",
+    'CREATE TABLE fixed_expenses(id INTEGER PRIMARY KEY,name TEXT,amount REAL)',
+    'CREATE TABLE daily_expenses(id INTEGER PRIMARY KEY,reason TEXT,amount REAL,method TEXT,register_id INTEGER,created_at TEXT)',
+    "INSERT INTO fixed_expenses VALUES(1,'Alquiler local histórico',350000)",
+    "INSERT INTO daily_expenses VALUES(1,'Servicio local histórico',40000,'transferencia',NULL,'2026-10-30 10:20:00')",
     "CREATE TABLE transactions (id INTEGER PRIMARY KEY, register_id INTEGER NOT NULL, total REAL NOT NULL, status TEXT NOT NULL DEFAULT 'completed', discount_percent REAL NOT NULL DEFAULT 0, discount_amount REAL NOT NULL DEFAULT 0, date TEXT, time TEXT, created_at TEXT)",
     "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, last_name TEXT NOT NULL, document TEXT NOT NULL, phone TEXT, is_active INTEGER NOT NULL, created_at TEXT)",
     "CREATE UNIQUE INDEX customers_document_unique ON customers(document)",
@@ -39,6 +43,47 @@ before(async () => {
     "20260919_006_refine_disposable_product_icons", "20260919_007_accented_disposable_icons",
   ];
   for (const id of previousIds) await client.execute({ sql: "INSERT INTO app_migrations (id) VALUES (?)", args: [id] });
+  // Preparar el esquema anterior, con gastos reales previos a la migración 021.
+  await client.execute("INSERT INTO app_migrations(id) VALUES('20261116_021_warehouse_expense_states')");
+  await applyDatabaseMigrations();
+  await client.batch([
+    "DELETE FROM app_migrations WHERE id='20261116_021_warehouse_expense_states'",
+    "INSERT INTO warehouse_expenses(id,business_unit_id,concept,description,amount_cents,method,occurred_at,idempotency_key,created_at,updated_at,version) VALUES(61,2,'Flete histórico','Conservar',3015,'transfer','2026-10-01 13:15:00','old-variable','2026-09-30 09:10:00','2026-10-01 14:00:00',3),(62,2,'Alquiler octubre','Contrato',15000000,'cash','2026-10-05 10:20:00','fixed:71','2026-10-05 10:20:00','2026-10-05 10:20:00',0)",
+    "INSERT INTO warehouse_fixed_expenses(id,business_unit_id,name,name_key,description,amount_cents,frequency,due_day,start_date,next_due) VALUES(70,2,'Alquiler','alquiler','Contrato',15000000,'month',1,'2026-10-01','2026-12-01')",
+    "INSERT INTO warehouse_fixed_occurrences(id,business_unit_id,fixed_expense_id,due_date,concept,description,amount_cents,expense_id) VALUES(71,2,70,'2026-10-01','Alquiler octubre','Contrato',15000000,62),(72,2,70,'2026-11-01','Alquiler noviembre','Contrato',15000000,NULL)",
+    "INSERT INTO warehouse_expense_audit(expense_id,action,snapshot,created_at) VALUES(62,'create','{\"historical\":true}','2026-10-05 10:20:00')",
+  ], 'write');
+});
+
+test('gastos históricos pendientes, vínculos preservados y migración sin duplicados ni reinicio de pagos', async () => {
+  await applyDatabaseMigrations();
+  const expenses = (await client.execute('SELECT * FROM warehouse_expenses ORDER BY id')).rows;
+  assert.equal(expenses.length,3);
+  assert.ok(expenses.every(e=>e.status==='pending' && e.paid_at===null));
+  assert.equal(expenses[0].amount_cents,3015);
+  assert.equal(expenses[0].occurred_at,'2026-10-01 13:15:00');
+  assert.equal(expenses[0].created_at,'2026-09-30 09:10:00');
+  assert.equal(expenses[0].updated_at,'2026-10-01 14:00:00');
+  assert.equal(expenses[0].version,3);
+  assert.equal(expenses[0].description,'Conservar');
+  const occurrences = (await client.execute('SELECT * FROM warehouse_fixed_occurrences ORDER BY id')).rows;
+  assert.equal(occurrences[0].expense_id,62);
+  assert.equal(occurrences[1].expense_id,expenses[2].id);
+  assert.equal((await client.execute("SELECT snapshot FROM warehouse_expense_audit WHERE action='create'")).rows[0].snapshot,'{"historical":true}');
+  assert.equal((await client.execute("SELECT count(*) n FROM warehouse_expense_audit WHERE action='migration_pending'")).rows[0].n,2);
+  await client.execute("UPDATE warehouse_expenses SET status='paid',paid_at='2026-11-16 10:00:00' WHERE id=61");
+  await applyDatabaseMigrations();
+  assert.equal((await client.execute('SELECT status FROM warehouse_expenses WHERE id=61')).rows[0].status,'paid');
+  assert.equal((await client.execute('SELECT count(*) n FROM warehouse_expenses')).rows[0].n,3);
+  assert.equal((await client.execute('SELECT count(*) n FROM warehouse_fixed_occurrences')).rows[0].n,2);
+  await assert.rejects(()=>client.execute("UPDATE warehouse_expenses SET status='paid' WHERE id=62"));
+  const local=(await client.execute('SELECT * FROM daily_expenses WHERE id=1')).rows[0];
+  assert.equal(local.amount,40000);assert.equal(local.created_at,'2026-10-30 10:20:00');assert.equal(local.status,'pending');assert.equal(local.paid_at,null);
+  assert.equal((await client.execute('SELECT count(*) n FROM daily_expenses WHERE fixed_expense_id=1')).rows[0].n,1);
+  await client.execute("UPDATE daily_expenses SET status='paid',paid_at='2026-11-16 12:00:00' WHERE id=1");
+  await applyDatabaseMigrations();
+  assert.equal((await client.execute('SELECT status FROM daily_expenses WHERE id=1')).rows[0].status,'paid');
+  assert.equal((await client.execute('SELECT count(*) n FROM daily_expenses')).rows[0].n,2);
 });
 
 after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });

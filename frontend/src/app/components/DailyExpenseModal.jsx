@@ -5,14 +5,22 @@ export function DailyExpenseModal({ onClose, onSubmit }) {
   const [reason, setReason] = useState("");
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("efectivo");
+  const [status,setStatus] = useState('pending');
+  const [paidAt,setPaidAt] = useState('');
+  const [idempotencyKey] = useState(()=>crypto.randomUUID());
   const [submitting, setSubmitting] = useState(false);
+  const [error,setError]=useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!reason || !amount || amount <= 0) return;
+    if (submitting || !reason || !amount || amount <= 0) return;
     setSubmitting(true);
+    setError('');
     try {
-      await onSubmit({ reason, amount: Number(amount), method });
+      await onSubmit({ reason, amount: Number(amount), method, status, paidAt:status==='paid'?paidAt:undefined, idempotencyKey });
+      window.dispatchEvent(new Event('local-expenses-changed'));
+    } catch(err) {
+      setError(err.response?.data?.message||'No se pudo registrar el gasto. Podés reintentar sin duplicarlo.');
     } finally {
       setSubmitting(false);
     }
@@ -20,7 +28,7 @@ export function DailyExpenseModal({ onClose, onSubmit }) {
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-background rounded-2xl w-full max-w-md border border-surface shadow-2xl">
+      <div className="bg-background rounded-2xl w-full max-w-md max-h-[90dvh] overflow-y-auto border border-surface shadow-2xl">
         <div className="p-6 border-b border-surface flex items-center justify-between">
           <h2 className="text-primary font-bold text-2xl flex items-center gap-2">
             <Wallet size={24} className="text-primary" />
@@ -71,6 +79,10 @@ export function DailyExpenseModal({ onClose, onSubmit }) {
               <option value="transferencia">Transferencia</option>
             </select>
           </div>
+          <label className="block text-sm font-bold">Estado del gasto<select required value={status} onChange={e=>setStatus(e.target.value)} className="w-full mt-2 bg-surface rounded-xl px-4 py-3"><option value="pending">Pendiente de pago</option><option value="paid">Ya pagado</option></select></label>
+          {status==='paid' && <label className="block text-sm font-bold">Fecha y hora efectiva de pago (Argentina)<input required type="datetime-local" value={paidAt} onChange={e=>setPaidAt(e.target.value)} className="w-full mt-2 bg-surface rounded-xl px-4 py-3"/></label>}
+          <p className="text-sm text-foreground/60">Los pendientes no afectan el balance. Los pagos en efectivo se descuentan de la caja correspondiente a su fecha efectiva.</p>
+          {error&&<p role="alert" className="text-red-600 text-sm">{error}</p>}
           <div className="pt-4 flex gap-4">
             <button
               type="button"

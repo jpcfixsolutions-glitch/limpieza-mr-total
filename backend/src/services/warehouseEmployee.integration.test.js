@@ -76,6 +76,15 @@ async function stock(unitId, productId) {
   return Number(result.rows[0].stock);
 }
 
+function noEconomics(value) {
+  if(!value || typeof value!=='object') return;
+  const forbidden=new Set(['price','salePrice','unitPrice','unitCost','cost','total','balance','amount','margin','profit','profitability','chargeToAccount','surcharge','surchargePercent','payments']);
+  for(const [key,item] of Object.entries(value)) {
+    assert.ok(!forbidden.has(key),`Campo económico expuesto: ${key}`);
+    noEconomics(item);
+  }
+}
+
 test("Empleado del galpón: alta, sesión, permisos mínimos, stock auditado y estados", async (t) => {
   const { default: authRoutes } = await import("../routes/auth.routes.js");
   const { default: warehouseRoutes } = await import("../routes/warehouse.routes.js");
@@ -126,12 +135,14 @@ test("Empleado del galpón: alta, sesión, permisos mínimos, stock auditado y e
       assert.equal(snapshot.production.items.find((row) => row.productId === 1).toProduce, 25);
       assert.deepEqual(snapshot.production.items[0].orders.map((row) => row.id), [first.id, second.id]);
       assert.equal(snapshot.production.items[0].oldestOrderAt, "2026-10-01 10:00:00");
-      assert.equal(snapshot.customers.length, 0);
+      assert.ok(snapshot.customers.some(c=>c.id===2));
+      assert.ok(snapshot.customers.every(c=>c.id!==1));
+      assert.ok(snapshot.customers.every(c=>Object.keys(c).every(key=>['id','name','lastName','phone','address'].includes(key))));
       assert.deepEqual(Object.keys(snapshot.access).sort(), ["daysRemaining", "isExpired", "isWarningPhase"]);
       assert.ok(snapshot.orders.every((row) => row.customerName === "Cliente"));
       assert.ok(snapshot.products.every((row) => !Object.hasOwn(row, "price") && !Object.hasOwn(row, "cost")));
       for (const row of snapshot.orders) {
-        for (const key of ["total", "chargeToAccount", "observations", "customerPhone", "customerAddress"]) assert.equal(Object.hasOwn(row, key), false);
+        for (const key of ["total", "chargeToAccount"]) assert.equal(Object.hasOwn(row, key), false);
         assert.ok(row.items.every((item) => !Object.hasOwn(item, "unitCost") && !Object.hasOwn(item, "unitPrice") && !Object.hasOwn(item, "total")));
       }
       const list = await request("/warehouse/orders");
@@ -150,8 +161,8 @@ test("Empleado del galpón: alta, sesión, permisos mínimos, stock auditado y e
         ["/categories"], ["/customers"], ["/customers/2"], ["/customers", "POST", {}], ["/cash-register/status"], ["/cash-register/open", "POST", {}],
         ["/transactions/1"], ["/transactions", "POST", {}], ["/stats/activity-log"], ["/inventory/movements"], ["/inventory/transfers", "POST", {}],
         ["/business-units"], ["/subscription/status"], ["/payment-methods"], ["/price-groups"], ["/pack-types"], ["/promotions"], ["/fixed-expenses"], ["/daily-expenses"], ["/internal-withdrawals", "POST", {}], ["/product-extractions"],
-        ["/warehouse/stats"], ["/warehouse/purchases"], ["/warehouse/customers", "POST", {}], ["/warehouse/production-preview", "POST", { items: [] }],
-        ["/warehouse/orders", "POST", {}], [`/warehouse/orders/${first.id}`, "PUT", { items: [] }], [`/warehouse/orders/${first.id}`, "DELETE"],
+        ["/warehouse/stats"], ["/warehouse/purchases"], ['/warehouse/settings'],['/warehouse/expenses','POST',{}],['/warehouse/expenses/1/status','PATCH',{}],['/warehouse/orders/1/receipts','POST',{}],
+        [`/warehouse/orders/${first.id}`, "PUT", { items: [] }], [`/warehouse/orders/${first.id}`, "DELETE"],
         [`/warehouse/orders/${first.id}/status`, "PATCH", { status: "cancelled" }], [`/warehouse/orders/${first.id}/status`, "PATCH", { status: "confirmed" }],
       ];
       for (const [path, method = "GET", body] of denied) assert.equal((await request(path, method, body)).status, 403, `${method} ${path}`);
@@ -189,7 +200,7 @@ test("Empleado del galpón: alta, sesión, permisos mínimos, stock auditado y e
       assert.deepEqual(concurrent.map((response) => response.status).sort(), [200, 409]);
     });
 
-    await t.test("gestiona preparación, Listo, En envío y Entregado sin crear pedidos", async () => {
+    await t.test("conserva preparación, Listo, En envío y Entregado para pedidos existentes", async () => {
       let order = first;
       const prepared = await request(`/warehouse/orders/${order.id}/items/${order.items[0].id}/status`, "PATCH", { status: "ready", expectedVersion: order.version });
       assert.equal(prepared.status, 200); order = await prepared.json(); assert.equal(order.items[0].status, "ready"); assert.equal(order.total, undefined);
@@ -201,6 +212,86 @@ test("Empleado del galpón: alta, sesión, permisos mínimos, stock auditado y e
       const persisted = (await (await request("/warehouse/operations")).json()).orders.find((row) => row.id === order.id);
       assert.equal(persisted.status, "delivered"); assert.equal(persisted.deliveredAt, order.deliveredAt);
       const count = await client.execute("SELECT count(*) AS n FROM warehouse_orders"); assert.equal(count.rows[0].n, 2);
+    });
+
+    await t.test('el stock conserva presentaciones, admite ingresos y salidas y rechaza productos del Local',async()=>{
+      await client.execute("INSERT INTO pack_types(id,name) VALUES(20,'LAV. X 1 LITRO')");
+      await client.execute('UPDATE products SET pack_type_id=20 WHERE id=2');
+      const snapshot=await (await request('/warehouse/operations')).json();
+      const product=snapshot.products.find(p=>p.id===2);
+      assert.equal(product.packTypeName,'LAV. X 1 LITRO');assert.equal(product.unitsPerPack,1);noEconomics(snapshot);
+      const localBefore=await stock(1,2),warehouseBefore=await stock(2,2);
+      const increased=await request('/warehouse/stock/2','PATCH',{stock:warehouseBefore+4,expectedStock:warehouseBefore,idempotencyKey:'liters-in'});
+      assert.equal(increased.status,200);noEconomics(await increased.json());
+      assert.equal((await request('/warehouse/stock/2','PATCH',{stock:warehouseBefore,expectedStock:warehouseBefore+4,idempotencyKey:'liters-out'})).status,200);
+      assert.equal(await stock(1,2),localBefore);
+      await client.execute("INSERT INTO products(id,name,cost,price,units_per_pack,stock,min_stock,icon,is_available,use_suggested_price) VALUES(99,'Sólo local',1,2,1,7,0,'Package',1,0)");
+      await client.execute("INSERT INTO business_unit_products(business_unit_id,product_id,stock,min_stock,cost,sale_price,wholesale_price,is_available,fulfillment_mode) VALUES(1,99,7,0,1,2,0,1,'OWN_STOCK')");
+      assert.equal((await request('/warehouse/stock/99','PATCH',{stock:8,expectedStock:7,idempotencyKey:'forbidden-local'})).status,404);
+      assert.equal(await stock(1,99),7);assert.ok(!(await (await request('/warehouse/operations')).json()).products.some(p=>p.id===99));
+    });
+
+    await t.test('crea clientes y pedidos compartidos, sin precios en API ni faltantes duplicados',async()=>{
+      const customerData={name:'Cliente del empleado',phone:'+54 351 123 8899',address:'Dirección operativa 123'};
+      const customerResponse=await request('/warehouse/customers','POST',customerData);assert.equal(customerResponse.status,201);
+      const customer=await customerResponse.json();noEconomics(customer);
+      assert.equal((await (await request('/warehouse/customers','POST',customerData)).json()).id,customer.id);
+      const before=await (await request('/warehouse/operations')).json();
+      assert.ok(before.customers.some(c=>c.id===customer.id&&c.address===customerData.address));
+      const missingBefore=before.production.items.find(i=>i.productId===1)?.toProduce||0;
+      const stockBefore=await stock(2,1),localBefore=await stock(1,1);
+      const input={customerId:customer.id,status:'confirmed',items:[{productId:1,quantity:100},{productId:2,quantity:2}],observations:'Preparar para entrega',idempotencyKey:'employee-order-created'};
+      const previewResponse=await request('/warehouse/production-preview','POST',{items:input.items});assert.equal(previewResponse.status,200);
+      const preview=await previewResponse.json();noEconomics(preview);
+      assert.equal(preview.production.items.find(i=>i.productId===1).toProduce,missingBefore+100);
+      const response=await request('/warehouse/orders','POST',input);assert.equal(response.status,201);
+      const created=await response.json();noEconomics(created);assert.equal(created.userId,employee.id);assert.equal(created.status,'confirmed');assert.ok(created.createdAt);
+      assert.equal((await (await request('/warehouse/orders','POST',input)).json()).id,created.id);
+      const raw=(await client.execute({sql:'SELECT total,user_id,charge_to_account,created_at FROM warehouse_orders WHERE id=?',args:[created.id]})).rows[0];
+      assert.equal(raw.total,1824);assert.equal(raw.user_id,employee.id);assert.equal(raw.charge_to_account,0);assert.ok(raw.created_at);
+      const rawItems=(await client.execute({sql:'SELECT product_id,unit_price,unit_cost FROM warehouse_order_items WHERE order_id=? ORDER BY product_id',args:[created.id]})).rows;
+      assert.deepEqual(rawItems.map(r=>Array.from(r)),[[1,18,8],[2,12,4]]);
+      const after=await (await request('/warehouse/operations')).json();noEconomics(after);
+      assert.equal(after.production.items.find(i=>i.productId===1).toProduce,missingBefore+100);
+      assert.equal(after.production.items.find(i=>i.productId===1).orders.filter(o=>o.id===created.id).length,1);
+      assert.equal(await stock(2,1),stockBefore);assert.equal(await stock(1,1),localBefore);
+      const adminOrders=await (await request('/warehouse/orders','GET',undefined,{...adminHeaders,'X-Business-Unit':'WAREHOUSE'})).json();
+      assert.equal(adminOrders.find(o=>o.id===created.id).total,1824);
+      const adminSnapshot=await (await request('/warehouse/operations','GET',undefined,{...adminHeaders,'X-Business-Unit':'WAREHOUSE'})).json();
+      assert.equal(adminSnapshot.products.find(p=>p.id===1).price,18);
+      const secondInput={...input,items:[{productId:1,quantity:5}],idempotencyKey:'employee-second-order'};
+      assert.equal((await request('/warehouse/orders','POST',secondInput)).status,201);
+      assert.equal((await (await request('/warehouse/operations')).json()).production.items.find(i=>i.productId===1).toProduce,missingBefore+105);
+      // Completar también el flujo operativo de un pedido creado por el empleado.
+      assert.equal((await request('/warehouse/stock/1','PATCH',{stock:150,expectedStock:stockBefore,idempotencyKey:'production-created-order'})).status,200);
+      let order=created;
+      for(const item of created.items) order=await (await request(`/warehouse/orders/${order.id}/items/${item.id}/status`,'PATCH',{status:'ready',expectedVersion:order.version})).json();
+      for(const status of ['ready','dispatched','delivered']) {
+        const result=await request(`/warehouse/orders/${order.id}/status`,'PATCH',{status,expectedVersion:order.version});assert.equal(result.status,200);order=await result.json();noEconomics(order);
+      }
+      assert.ok(order.deliveredAt);assert.equal(await stock(2,1),50);assert.equal(await stock(1,1),localBefore);
+    });
+
+    await t.test('rechaza pedidos manipulados, precios, clientes ajenos y claves de otro usuario',async()=>{
+      const valid={customerId:2,status:'confirmed',items:[{productId:1,quantity:1}],idempotencyKey:'tamper-order'};
+      const before=(await client.execute('SELECT count(*) n FROM warehouse_orders')).rows[0].n;
+      for(const input of [
+        {...valid,chargeToAccount:true},{...valid,chargeToAccount:false},{...valid,total:1},{...valid,unitPrice:1},
+        {...valid,businessUnitId:1},{...valid,userId:1},{...valid,status:'draft'},
+        {...valid,items:[{productId:1,quantity:1,unitPrice:0}]},{...valid,items:[{productId:1,quantity:1,price:0}]},
+        {...valid,items:[{productId:1,quantity:1,unitCost:0}]},
+      ]) assert.equal((await request('/warehouse/orders','POST',input)).status,403);
+      assert.equal((await request('/warehouse/production-preview','POST',{items:[{productId:1,quantity:1,unitPrice:0}]})).status,403);
+      assert.equal((await request(`/warehouse/orders/${second.id}/status`,'PATCH',{status:'preparing',expectedVersion:0,total:0})).status,403);
+      assert.equal((await request(`/warehouse/orders/${second.id}/items/${second.items[0].id}/status`,'PATCH',{status:'ready',expectedVersion:0,unitPrice:0})).status,403);
+      assert.equal((await request('/warehouse/customers','POST',{name:'Ataque',phone:'3511234567',address:'Calle',balance:0})).status,403);
+      for(const input of [{...valid,customerId:1},{...valid,items:[{productId:99,quantity:1}]},{...valid,items:[{productId:1,quantity:-1}]},{...valid,items:[{productId:1,quantity:1.5}]}]) assert.equal((await request('/warehouse/orders','POST',input)).status,400);
+      assert.equal((await request('/warehouse/orders','POST',valid,{...employeeHeaders,'X-Business-Unit':'LOCAL'})).status,403);
+      assert.equal((await client.execute('SELECT count(*) n FROM warehouse_orders')).rows[0].n,before);
+      await WarehouseService.createOrder({...valid,items:[{productId:1,quantity:1,unitPrice:99}],idempotencyKey:'admin-order-key'},1,warehouse);
+      assert.equal((await request('/warehouse/orders','POST',{...valid,idempotencyKey:'admin-order-key'})).status,409);
+      const values=(await client.execute('SELECT sale_price,cost FROM business_unit_products WHERE business_unit_id=2 AND product_id=1')).rows[0];
+      assert.equal(values.sale_price,18);assert.equal(values.cost,8);
     });
 
     await t.test("un cambio de rol o baja revoca los permisos de tokens anteriores", async () => {

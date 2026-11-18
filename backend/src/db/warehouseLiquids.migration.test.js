@@ -35,7 +35,7 @@ test('migración exclusiva aditiva: conserva filas y esquema del Local; comienza
     assert.equal((await client.execute('SELECT count(*) AS n FROM app_migrations')).rows[0].n,2);
     await assert.rejects(()=>verifyWarehouseLiquidsCompatibility(client),/sin registro de migración/);
   } finally {
-    client.close();
+    await client.close();
     // directory procede exclusivamente de mkdtemp, dentro de tmpdir.
     assert.ok(path.resolve(directory).startsWith(path.resolve(tmpdir())+path.sep));
     await rm(directory,{recursive:true,force:true,maxRetries:10,retryDelay:200});
@@ -43,15 +43,12 @@ test('migración exclusiva aditiva: conserva filas y esquema del Local; comienza
 });
 
 test('preflight detiene un esquema incompatible antes de crear estructuras',async()=>{
-  const directory=await mkdtemp(path.join(tmpdir(),'mrtotal-liquid-preflight-'));
-  const client=createClient({url:`file:${path.join(directory,'test.db')}`});
+  const client=createClient({url:'file::memory:'});
   try {
     await client.execute('CREATE TABLE warehouse_order_items(id INTEGER PRIMARY KEY,product_id INTEGER NOT NULL)');
     await assert.rejects(()=>verifyWarehouseLiquidsCompatibility(client),/debe admitir NULL/);
     assert.equal((await client.execute("SELECT count(*) AS n FROM sqlite_master WHERE name='warehouse_liquid_products'")).rows[0].n,0);
   } finally {
-    client.close();
-    assert.ok(path.resolve(directory).startsWith(path.resolve(tmpdir())+path.sep));
-    await rm(directory,{recursive:true,force:true,maxRetries:10,retryDelay:200});
+    await client.close();
   }
 });

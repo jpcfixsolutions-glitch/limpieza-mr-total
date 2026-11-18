@@ -8,6 +8,7 @@ import { WarehouseModal } from "./WarehouseModal.jsx";
 import { WarehouseProductionCard } from "./WarehouseProductionCard.jsx";
 import { WarehouseEmployeeWelcome } from "./WarehouseWelcome.jsx";
 import { WarehouseEmployeeProduction } from "./WarehouseEmployeeProduction.jsx";
+import { warehouseOrderInput,warehouseOrderItems } from '../../utils/warehouseOrderInput.js';
 
 const card = "bg-surface border border-foreground/10 rounded-2xl p-5 shadow-sm";
 const input = "w-full min-w-0 bg-background border border-foreground/15 rounded-xl px-3 py-2 outline-none focus:border-primary";
@@ -43,7 +44,7 @@ function OrderStatusControl({ order, disabled, onChange }) {
     {current === "preparing" && !allReady && <p className="text-xs text-foreground/60">Prepará los productos en Ver detalle.</p>}
   </div>;
 }
-function NewOrderModal({ data, onClose, onSaved, onCustomerCreated }) {
+function NewOrderModal({ data, onClose, onSaved, onCustomerCreated, isEmployee=false }) {
   const [customerId, setCustomerId] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
   const [productSearch, setProductSearch] = useState("");
@@ -78,19 +79,19 @@ function NewOrderModal({ data, onClose, onSaved, onCustomerCreated }) {
     const controller = new AbortController();
     setPreviewLoading(true);
     const timeout = window.setTimeout(() => {
-      api.post("/warehouse/production-preview", { items: items.map((item) => ({ ...item, quantity: Number(item.quantity) })) }, { signal: controller.signal })
+      api.post("/warehouse/production-preview", { items: warehouseOrderItems(items,isEmployee) }, { signal: controller.signal })
         .then(({ data: result }) => { if (!controller.signal.aborted) setPreview(result); })
         .catch(() => { if (!controller.signal.aborted) setPreviewError("No se pudo estimar la producción. Podés registrar el pedido y actualizar el resumen."); })
         .finally(() => { if (!controller.signal.aborted) setPreviewLoading(false); });
     }, 300);
     return () => { window.clearTimeout(timeout); controller.abort(); };
-  }, [items, data]);
+  }, [items, data,isEmployee]);
   const warnings = (preview?.items || []).filter((item) => item.toProduce > 0);
   const addProduct = (product) => {
     edited();
     setItems((previous) => previous.some((item) => item.productId === product.id)
       ? previous.map((item) => item.productId === product.id ? { ...item, quantity: Number(item.quantity || 0) + 1 } : item)
-      : [...previous, { productId: product.id, quantity: 1, unitPrice: product.price }]);
+      : [...previous, { productId: product.id, quantity: 1, ...(isEmployee?{}:{unitPrice: product.price}) }]);
   };
 
   const createCustomer = async () => {
@@ -118,7 +119,7 @@ function NewOrderModal({ data, onClose, onSaved, onCustomerCreated }) {
     if (items.some((item) => !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0 || (String(item.productId).startsWith("liquid:") ? Math.abs(Number(item.quantity)*1000-Math.round(Number(item.quantity)*1000))>1e-6 : !Number.isSafeInteger(Number(item.quantity))))) { setError("Indicá cantidades positivas: litros con hasta tres decimales o unidades enteras."); return; }
     savingRef.current = true; setSaving(true); setError("");
     try {
-      await api.post("/warehouse/orders", { customerId: Number(customerId), status: "confirmed", items: items.map((item) => ({ ...item, quantity: Number(item.quantity) })), observations, chargeToAccount, idempotencyKey: requestKey.current });
+      await api.post("/warehouse/orders", warehouseOrderInput({customerId,items,observations,chargeToAccount,idempotencyKey:requestKey.current},isEmployee));
       toast.success("Pedido registrado en preparación.");
       onSaved();
     } catch (err) { setError(err.response?.data?.message || "No se pudo guardar el pedido. Conservamos los datos para reintentar."); }
@@ -155,15 +156,15 @@ function NewOrderModal({ data, onClose, onSaved, onCustomerCreated }) {
           <label className="block text-sm font-bold">Buscar producto<input type="search" className={`${input} mt-1`} placeholder="Nombre o código" value={productSearch} onChange={(e) => setProductSearch(e.target.value)} /></label>
           <div className="max-h-48 overflow-y-auto border border-foreground/10 rounded-xl divide-y divide-foreground/10">
             {productMatches.slice(0, 30).map((product) => <button key={product.id} type="button" onClick={() => addProduct(product)} className="w-full text-left px-3 py-2 flex items-center justify-between gap-3 hover:bg-background">
-              <span className="min-w-0 break-words text-sm"><span className="font-bold">{product.name}</span><span className="block text-foreground/60">{product.codbarra ? `Código ${product.codbarra} · ` : ""}Stock: {number(product.stock)} {product.unit || "u."}</span></span>
+              <span className="min-w-0 break-words text-sm"><span className="font-bold">{product.name}</span><span className="block text-foreground/60">{product.codbarra ? "C\u00f3digo " + product.codbarra + " \u00b7 " : ""}Cantidad disponible: {number(product.stock)} {product.unit || "u."}{product.packTypeName ? " \u00b7 Presentaci\u00f3n: " + product.packTypeName : ""}</span></span>
               <Plus size={18} className="shrink-0 text-primary" aria-label="Agregar" />
             </button>)}
             {!productMatches.length && <p className="p-3 text-sm text-foreground/60">No se encontraron productos disponibles.</p>}
           </div>
           {productMatches.length > 30 && <p className="text-xs text-foreground/60">Mostrando 30 resultados. Escribí para afinar la búsqueda.</p>}
           <div className="space-y-2">{items.map((item) => <div key={item.productId} className="grid grid-cols-[minmax(0,1fr)_6rem_auto] gap-2 items-center bg-background rounded-xl p-3">
-            <div className="min-w-0"><p className="font-bold text-sm break-words">{products.get(item.productId)?.name}</p><p className="text-xs text-foreground/60">Stock: {number(products.get(item.productId)?.stock || 0)} {products.get(item.productId)?.unit || "u."}</p></div>
-            <label className="text-xs font-bold">Cantidad<input className={`${input} mt-1`} aria-label={`Cantidad de ${products.get(item.productId)?.name}`} required type="number" step={String(item.productId).startsWith("liquid:") ? "0.001" : "1"} min={String(item.productId).startsWith("liquid:") ? "0.001" : "1"} value={item.quantity} onChange={(e) => { edited(); setItems(items.map((row) => row.productId === item.productId ? { ...row, quantity: e.target.value } : row)); }} /></label>
+            <div className="min-w-0"><p className="font-bold text-sm break-words">{products.get(item.productId)?.name}</p><p className="text-xs text-foreground/60">Cantidad disponible: {number(products.get(item.productId)?.stock || 0)} {products.get(item.productId)?.unit || "u."}{products.get(item.productId)?.packTypeName ? " \u00b7 Presentaci\u00f3n: " + products.get(item.productId).packTypeName : ""}</p></div>
+            <label className="text-xs font-bold">Cantidad<input className={input + " mt-1"} aria-label={"Cantidad de " + (products.get(item.productId)?.name || "producto")} required type="number" step={String(item.productId).startsWith("liquid:") ? "0.001" : "1"} min={String(item.productId).startsWith("liquid:") ? "0.001" : "1"} value={item.quantity} onChange={(e) => { edited(); setItems(items.map((row) => row.productId === item.productId ? { ...row, quantity: e.target.value } : row)); }} /></label>
             <button type="button" className="p-2 text-primary" aria-label={`Quitar ${products.get(item.productId)?.name}`} onClick={() => { edited(); setItems(items.filter((row) => row.productId !== item.productId)); }}><Trash2 size={18} /></button>
           </div>)}</div>
           {previewLoading && <p role="status" className="text-sm text-foreground/60">Calculando disponibilidad y producción…</p>}
@@ -174,7 +175,7 @@ function NewOrderModal({ data, onClose, onSaved, onCustomerCreated }) {
             <p className="mt-2 text-xs text-foreground/60">Estimación con el stock asignable actual; se recalcula al actualizar los pedidos.</p>
           </div>}
           <label className="block text-sm font-bold">Observaciones<textarea className={`${input} mt-1`} value={observations} onChange={(e) => { edited(); setObservations(e.target.value); }} rows={2} /></label>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={chargeToAccount} onChange={(e) => { edited(); setChargeToAccount(e.target.checked); }} />Cargar a cuenta al despachar</label>
+          {!isEmployee && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={chargeToAccount} onChange={(e) => { edited(); setChargeToAccount(e.target.checked); }} />Cargar a cuenta al despachar</label>}
         </section>}
       </fieldset>
       {error && <p role="alert" className="text-sm text-primary">{error}</p>}
@@ -213,7 +214,9 @@ export function WarehouseOrdersView({ user, employeeHome = false }) {
     updatingRef.current = true; setUpdating(true); setUpdateError("");
     try {
       const path = confirmation.item ? `/warehouse/orders/${confirmation.order.id}/items/${confirmation.item.id}/status` : `/warehouse/orders/${confirmation.order.id}/status`;
-      const { data: updated } = await api.patch(path, { status: confirmation.status, expectedVersion: confirmation.order.version, liquidAllocations: Object.fromEntries(Object.entries(liquidAllocations).map(([id, rows]) => [id, Object.entries(rows).filter(([,liters])=>Number(liters)>0).map(([containerId,liters])=>({containerId:Number(containerId),liters:Number(liters)}))])) });
+      const payload = { status: confirmation.status, expectedVersion: confirmation.order.version };
+      if (!confirmation.item) payload.liquidAllocations = Object.fromEntries(Object.entries(liquidAllocations).map(([id, rows]) => [id, Object.entries(rows).filter(([,liters])=>Number(liters)>0).map(([containerId,liters])=>({containerId:Number(containerId),liters:Number(liters)}))]));
+      const { data: updated } = await api.patch(path, payload);
       replaceOrder(updated);
       const returnToDetail = confirmation.item ? confirmation.order.id : null;
       setConfirmation(null); setDetailId(returnToDetail);
@@ -225,7 +228,7 @@ export function WarehouseOrdersView({ user, employeeHome = false }) {
   return <main className="flex-1 min-w-0 p-5 md:p-10 pb-24"><div className="max-w-7xl mx-auto">
     <div className="flex flex-wrap items-end justify-between gap-4 mb-7">
       {employeeHome ? <WarehouseEmployeeWelcome user={user} /> : <div><p className="text-primary font-black uppercase tracking-wider text-xs">Galpón mayorista</p><h1 className="text-3xl font-black">Pedidos</h1><p className="text-foreground/60 mt-1">Preparación, producción y entrega de pedidos.</p></div>}
-      <div className="flex flex-wrap gap-2"><button type="button" className={`${secondary} flex items-center gap-2`} onClick={refresh} disabled={loading}><RefreshCw size={16} aria-hidden="true" />Actualizar</button>{!isEmployee && <button type="button" className={`${button} flex items-center gap-2`} onClick={() => setCreating(true)} disabled={!data || Boolean(error)}><Plus size={18} />Nuevo pedido</button>}</div>
+      <div className="flex flex-wrap gap-2"><button type="button" className={`${secondary} flex items-center gap-2`} onClick={refresh} disabled={loading}><RefreshCw size={16} aria-hidden="true" />Actualizar</button><button type="button" className={`${button} flex items-center gap-2`} onClick={() => setCreating(true)} disabled={!data || Boolean(error)}><Plus size={18} />Nuevo pedido</button></div>
     </div>
     {error && <p role="alert" className="text-primary mb-4">{error} Volvé a intentar con Actualizar.</p>}
     <section className={card} aria-label="Listado de pedidos">
@@ -242,7 +245,7 @@ export function WarehouseOrdersView({ user, employeeHome = false }) {
       </>}
     </section>
     {employeeHome ? <div className="mt-6"><WarehouseEmployeeProduction production={data?.production} loading={loading} error={error} onDetail={setDetailId} /></div> : <WarehouseProductionCard production={data?.production} loading={loading} error={error} />}
-    {!isEmployee && creating && data && <NewOrderModal data={data} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); refresh(); }} onCustomerCreated={refresh} />}
+    {creating && data && <NewOrderModal data={data} isEmployee={isEmployee} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); refresh(); }} onCustomerCreated={refresh} />}
     {detail && <WarehouseModal title={`Pedido #${detail.id}`} onClose={() => setDetailId(null)}>
       <div className="flex flex-wrap justify-between gap-3 mb-4"><div><p className="font-black break-words">{detail.customerName || "Sin cliente"} {detail.customerLastName}</p>{!isEmployee && <><p className="text-sm mt-1 break-words">{detail.customerPhone || "Sin teléfono registrado"}</p><p className="text-sm break-words">{detail.customerAddress || "Sin dirección registrada"}</p></>}</div><div><Status status={detail.status} /><p className="text-xs text-foreground/60 mt-2">Creado: {date(detail.createdAt)}</p>{detail.deliveredAt && <p className="text-xs text-foreground/60">Entregado: {date(detail.deliveredAt)}</p>}</div></div>
       <p className="text-sm text-foreground/60 mb-3">{["confirmed", "preparing", "ready"].includes(detail.status) ? "Disponibilidad informativa asignada por orden de registro, sin reservar stock físico." : detail.status === "dispatched" || detail.status === "delivered" ? "El stock de este pedido ya se descontó al despachar." : "Este pedido no genera demanda de producción."}</p>

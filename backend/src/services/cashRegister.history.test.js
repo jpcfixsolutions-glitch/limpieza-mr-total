@@ -45,7 +45,7 @@ test("historial por lotes conserva detalles, gastos y cobros separados por caja"
     { transactionId: 10, productName: "Producto A", price: 40, quantity: 2, total: 80 },
     { transactionId: 20, productName: "Producto B", price: 40, quantity: 1, total: 40 },
   ]);
-  await db.insert(schema.dailyExpenses).values({ id: 1, registerId: 1, reason: "Gasto", method: "efectivo", amount: 10 });
+  await db.insert(schema.dailyExpenses).values({ id: 1, registerId: 1, paymentRegisterId:1, status:'paid', paidAt:'2026-11-07 12:00:00', reason: "Gasto", method: "efectivo", amount: 10 });
   await db.insert(schema.accountMovements).values([
     { id: 1, customerId: 1, registerId: 1, type: "pago", amount: 20, methodName: "Efectivo" },
     { id: 2, customerId: 1, registerId: 2, type: "pago", amount: 50, methodName: "Mixto" },

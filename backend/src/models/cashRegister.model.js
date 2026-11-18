@@ -42,8 +42,8 @@ export const CashRegisterModel = {
         .innerJoin(transactions, eq(transactionItems.transactionId, transactions.id))
         .innerJoin(cashRegisters, eq(transactions.registerId, cashRegisters.id)).where(closed),
       db.select(getTableColumns(dailyExpenses)).from(dailyExpenses)
-        .innerJoin(cashRegisters, eq(dailyExpenses.registerId, cashRegisters.id))
-        .where(closed).orderBy(desc(dailyExpenses.createdAt)),
+        .innerJoin(cashRegisters, eq(dailyExpenses.paymentRegisterId, cashRegisters.id))
+        .where(and(closed,eq(dailyExpenses.status,'paid'))).orderBy(desc(dailyExpenses.paidAt)),
       db.select(getTableColumns(accountMovements)).from(accountMovements)
         .innerJoin(cashRegisters, eq(accountMovements.registerId, cashRegisters.id))
         .where(and(closed, eq(accountMovements.type, "pago")))

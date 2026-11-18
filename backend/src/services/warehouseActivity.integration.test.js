@@ -42,6 +42,8 @@ before(async () => {
   ],'write');
   const { warehouseSettingsMigration } = await import('../db/warehouseSettingsMigration.js');
   await client.batch(warehouseSettingsMigration.statements,'write');
+  const { warehouseExpenseStatesMigration } = await import('../db/warehouseExpenseStatesMigration.js');
+  await client.batch(warehouseExpenseStatesMigration.statements,'write');
 });
 after(async () => { client?.close(); if (directory) await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
@@ -85,14 +87,14 @@ test("cobros parciales, combinados y devolución en fecha real sin duplicación"
 });
 
 test("gastos con fecha propia, revisiones auditadas y borrado lógico; balances consistentes", async () => {
-  const payload = { concept: "Flete", amount: 30.15, method: "transfer", occurredAt: "2026-11-15T00:00", idempotencyKey: "expense-1" };
+  const payload = { status: "paid", paidAt: "2026-11-15T00:00", concept: "Flete", amount: 30.15, method: "transfer", occurredAt: "2026-11-15T00:00", idempotencyKey: "expense-1" };
   const expense = await service.expense(unit, payload, 1);
   assert.equal((await service.expense(unit, payload, 1)).id, expense.id);
   assert.equal((await service.stats(unit, { date: "2026-11-15" })).summary.expenseCents, 3015);
   const edited = await service.expense(unit, { ...payload, amount: 40, occurredAt: "2026-11-16T12:00", expectedVersion: 0 }, 1, expense.id);
   assert.equal(edited.version, 1);
-  assert.equal((await service.stats(unit, { date: "2026-11-15" })).days.length, 0);
-  assert.equal((await service.stats(unit, { date: "2026-11-16" })).summary.netCents, -4000);
+  assert.equal((await service.stats(unit, { date: "2026-11-15" })).summary.expenseCents, 4000, "editar la fecha del gasto conserva la fecha efectiva del pago");
+  assert.equal((await service.stats(unit, { date: "2026-11-16" })).summary.netCents, 0);
   await assert.rejects(() => service.expense(unit, { ...payload, expectedVersion: 0 }, 1, expense.id), (e) => e.status === 409);
   await service.expense(unit, { expectedVersion: 1 }, 1, expense.id, true);
   assert.equal((await service.stats(unit, { date: "2026-11-16" })).days.length, 0);
@@ -115,7 +117,7 @@ test("rutas de actividad y finanzas exigen administrador y unidad Galpón", asyn
   const headers = { Authorization: `Bearer ${jwt.sign({ id: 1, role: "admin" }, process.env.JWT_SECRET)}`, "X-Business-Unit": "WAREHOUSE", "Content-Type": "application/json" };
   const employee = `Bearer ${jwt.sign({ id: 2, role: "EMPLEADO_GALPON" }, process.env.JWT_SECRET)}`;
   try {
-    for (const [url, method] of [["/stats?date=2026-11-13", "GET"], ["/activity/2026-11-13", "GET"], ["/expenses", "POST"], ["/expenses/1", "PUT"], ["/expenses/1", "DELETE"], ["/orders/1/receipts", "POST"]]) {
+    for (const [url, method] of [["/stats?date=2026-11-13", "GET"], ["/activity/2026-11-13", "GET"], ["/expenses", "POST"], ["/expenses/1", "PUT"], ["/expenses/1", "DELETE"], ["/expenses/1/status", "PATCH"], ["/orders/1/receipts", "POST"]]) {
       const request = { method, headers, ...(method !== "GET" ? { body: "{}" } : {}) };
       assert.equal((await fetch(root + url, { ...request, headers: {} })).status, 401);
       assert.equal((await fetch(root + url, { ...request, headers: { ...headers, Authorization: employee } })).status, 403);
@@ -130,7 +132,7 @@ test("rutas de actividad y finanzas exigen administrador y unidad Galpón", asyn
     const historical = await fetch(root + "/stats?period=all", { headers });
     assert.equal(historical.status, 200);
     assert.equal((await historical.json()).summary.orders, 4);
-    const body = { concept: "Gasto HTTP", amount: 10, method: "cash", occurredAt: "2026-11-17", idempotencyKey: "http-expense" };
+    const body = { status: "pending", concept: "Gasto HTTP", amount: 10, method: "cash", occurredAt: "2026-11-17", idempotencyKey: "http-expense" };
     const saved = await fetch(root + "/expenses", { headers, method: "POST", body: JSON.stringify(body) });
     assert.equal(saved.status, 200);
     const expense = await saved.json();
@@ -143,11 +145,11 @@ test("rutas de actividad y finanzas exigen administrador y unidad Galpón", asyn
 test("la medianoche argentina cambia el día sin depender de UTC ni del servidor", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2027-01-01T02:59:59Z") });
   try {
-    const previous = await service.expense(unit, { concept: "Antes de medianoche", amount: 1, method: "cash", idempotencyKey: "midnight-before" }, 1);
+    const previous = await service.expense(unit, { status: "paid", concept: "Antes de medianoche", amount: 1, method: "cash", idempotencyKey: "midnight-before" }, 1);
     assert.equal(previous.occurred_at, "2026-12-31 23:59:59");
     assert.equal((await service.stats(unit)).summary.expenseCents, 100);
     t.mock.timers.setTime(new Date("2027-01-01T03:00:00Z").getTime());
-    const next = await service.expense(unit, { concept: "Después de medianoche", amount: 2, method: "cash", idempotencyKey: "midnight-after" }, 1);
+    const next = await service.expense(unit, { status: "paid", concept: "Después de medianoche", amount: 2, method: "cash", idempotencyKey: "midnight-after" }, 1);
     assert.equal(next.occurred_at, "2027-01-01 00:00:00");
     assert.equal((await service.stats(unit)).summary.expenseCents, 200);
     assert.equal((await service.stats(unit, { date: "2026-12-31" })).summary.expenseCents, 100);
@@ -206,15 +208,15 @@ test('Configuración: recuperación idempotente, snapshots y pago único de gast
   await runWarehouseTransaction(tx=>materializeFixed(tx,unit.id,future));
   const later=await getOccurrences();assert.equal(later.at(-1).amount_cents,4000);
   const beforePay=await service.stats(unit,{date:today});
-  const paid=await settings.settle(unit,initial[0].id,{method:'cash',date:today},1);
-  assert.equal((await settings.settle(unit,initial[0].id,{method:'cash',date:today},1)).id,paid.id);
+  const paid=await settings.settle(unit,initial[0].id,{method:'cash',paidAt:today+'T00:00',expectedVersion:0},1);
+  await assert.rejects(()=>settings.settle(unit,initial[0].id,{method:'cash',paidAt:today+'T00:00',expectedVersion:0},1),e=>e.status===409);
   const afterPay=await service.stats(unit,{date:today});
   assert.equal(afterPay.summary.expenseCents-beforePay.summary.expenseCents,2515);
   assert.ok(afterPay.expenses.some(e=>e.id===paid.id&&e.fixed_due_date===start));
   for(const period of ['day','week','month','all']){
     const report=await service.stats(unit,{period,date:today});
     assert.equal(report.summary.netCents,report.days.reduce((s,d)=>s+d.netCents,0));
-    assert.equal(report.summary.expenseCents,report.expenses.reduce((s,e)=>s+e.amount_cents,0));
+    assert.equal(report.summary.expenseCents,report.expenses.filter(e=>e.status==='paid').reduce((s,e)=>s+e.amount_cents,0));
   }
   await assert.rejects(()=>service.expense(unit,{expectedVersion:paid.version},1,paid.id,true),e=>e.status===409);
   await settings.save(unit,'expense',{...data,amount:40,active:false,expectedVersion:changed.version},1,fixed.id);
@@ -286,4 +288,62 @@ test('Configuración: endpoints protegidos y auditoría',async()=>{
     assert.equal((await fetch(root+'/settings',{headers})).status,200);
     assert.ok((await client.execute('SELECT count(*) n FROM warehouse_settings_audit')).rows[0].n>0);
   }finally{await new Promise(r=>server.close(r));}
+});
+
+test('gastos pendientes, pago real, concurrencia y reversión conservan balance y auditoría', async () => {
+  const before = await service.stats(unit,{period:'all'});
+  const pending = await service.expense(unit,{concept:'Insumos pendientes',amount:400,method:'cash',status:'pending',occurredAt:'2026-10-30T10:00',idempotencyKey:'states-pending'},1);
+  assert.equal(pending.status,'pending'); assert.equal(pending.paid_at,null);
+  assert.equal((await service.stats(unit,{period:'all'})).summary.netCents,before.summary.netCents);
+  const payload={status:'paid',method:'transfer',paidAt:'2026-11-02T15:37',expectedVersion:pending.version};
+  const results=await Promise.allSettled([1,2].map(()=>service.changeExpenseStatus(unit,pending.id,payload,1)));
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+  assert.equal(results.find(r=>r.status==='rejected').reason.status,409);
+  const paid=results.find(r=>r.status==='fulfilled').value;
+  assert.equal(paid.paid_at,'2026-11-02 15:37:00');
+  assert.equal((await service.stats(unit,{date:'2026-10-30'})).summary.expenseCents,0);
+  for(const period of ['day','week','month']) {
+    const report=await service.stats(unit,{period,date:'2026-11-02'});
+    assert.ok(report.expenses.some(e=>e.id===pending.id));
+    assert.equal(report.summary.expenseCents,report.expenses.filter(e=>e.status==='paid').reduce((s,e)=>s+e.amount_cents,0));
+  }
+  assert.ok((await service.day(unit,'2026-11-02')).expenses.some(e=>e.id===pending.id));
+  const reversed=await service.changeExpenseStatus(unit,pending.id,{status:'pending',expectedVersion:paid.version},1);
+  assert.equal(reversed.paid_at,null);
+  assert.equal((await service.stats(unit,{period:'all'})).summary.netCents,before.summary.netCents);
+  await assert.rejects(()=>service.changeExpenseStatus(unit,pending.id,payload,1),e=>e.status===409,'un reintento viejo no vuelve a pagar después de revertir');
+  await assert.rejects(()=>service.changeExpenseStatus({id:1,code:'WAREHOUSE'},pending.id,{...payload,expectedVersion:reversed.version},1),e=>e.status===404);
+  const audit=(await client.execute({sql:'SELECT action,snapshot FROM warehouse_expense_audit WHERE expense_id=? ORDER BY id',args:[pending.id]})).rows;
+  assert.deepEqual(audit.map(a=>a.action),['create','pay','reverse_payment']);
+  assert.equal(JSON.parse(audit[2].snapshot).before.paid_at,paid.paid_at);
+  const immediate={concept:'Pagado al crear',amount:30,method:'cash',status:'paid',paidAt:'2026-10-31T23:59',idempotencyKey:'states-immediate'};
+  const created=await service.expense(unit,immediate,1);
+  assert.equal((await service.expense(unit,immediate,1)).id,created.id);
+  assert.equal((await service.stats(unit,{period:'all'})).summary.netCents,before.summary.netCents-3000);
+  await assert.rejects(()=>service.expense(unit,{...immediate,status:undefined,idempotencyKey:'missing-status'},1),e=>e.status===400);
+  for(const paidAt of ['2026-02-30T10:00','2026-11-01T24:00','2099-01-01T10:00']) {
+    await assert.rejects(()=>service.changeExpenseStatus(unit,pending.id,{...payload,expectedVersion:reversed.version,paidAt},1),e=>e.status===400);
+  }
+});
+
+test('cada mes fijo es independiente y permite revertir y pagar nuevamente sin nuevos gastos', async () => {
+  const { WarehouseSettingsService:settings,materializeFixed }=await import('./warehouseSettings.service.js');
+  const { runWarehouseTransaction }=await import('./warehouse.service.js');
+  const config=await settings.save(unit,'expense',{name:'Alquiler estados mensuales',amount:350000,frequency:'month',dueDay:1,startDate:'2026-11-01',active:true},1);
+  await runWarehouseTransaction(tx=>materializeFixed(tx,unit.id,'2026-12-01'));
+  const occurrences=(await client.execute({sql:'SELECT f.*,e.status,e.version FROM warehouse_fixed_occurrences f JOIN warehouse_expenses e ON e.id=f.expense_id WHERE f.fixed_expense_id=? ORDER BY due_date',args:[config.id]})).rows;
+  assert.equal(occurrences.length,2);
+  const before=(await service.stats(unit,{period:'all'})).summary.netCents;
+  const payment={method:'cash',paidAt:'2026-11-10T11:25',expectedVersion:0};
+  const paid=await settings.settle(unit,occurrences[0].id,payment,1);
+  assert.equal(paid.id,occurrences[0].expense_id);
+  assert.equal((await service.stats(unit,{period:'all'})).summary.netCents,before-35000000);
+  assert.equal((await client.execute({sql:'SELECT status FROM warehouse_expenses WHERE id=?',args:[occurrences[1].expense_id]})).rows[0].status,'pending');
+  const reversed=await service.changeExpenseStatus(unit,paid.id,{status:'pending',expectedVersion:paid.version},1);
+  assert.equal((await service.stats(unit,{period:'all'})).summary.netCents,before);
+  await assert.rejects(()=>settings.settle(unit,occurrences[0].id,payment,1),e=>e.status===409);
+  const repaid=await settings.settle(unit,occurrences[0].id,{...payment,expectedVersion:reversed.version},1);
+  assert.equal(repaid.id,paid.id);
+  assert.equal((await service.stats(unit,{period:'all'})).summary.netCents,before-35000000);
+  assert.equal((await client.execute({sql:'SELECT count(*) n FROM warehouse_expenses e JOIN warehouse_fixed_occurrences f ON f.expense_id=e.id WHERE f.fixed_expense_id=?',args:[config.id]})).rows[0].n,2);
 });

@@ -2,6 +2,7 @@ import { materializeFixed, paymentParts, storeParts } from "./warehouseSettings.
 import { sql } from "drizzle-orm";
 import { getArgentinaTime } from "../db/timeUtils.js";
 import { runWarehouseTransaction } from "./warehouse.service.js";
+import { changeExpensePayment, paymentTimestamp } from './warehouseExpensePayments.js';
 
 const fail = (status, message) => { throw { status, message }; };
 const assertUnit = (unit) => { if (unit?.code !== "WAREHOUSE") fail(403, "Esta operación pertenece al Galpón."); };
@@ -66,8 +67,8 @@ function ledger(unitId, start, end) {
     FROM account_movements m LEFT JOIN warehouse_payment_parts p ON p.account_movement_id=m.id LEFT JOIN account_payment_details d ON d.account_movement_id=m.id AND p.id IS NULL
     WHERE m.business_unit_id=${unitId} AND m.type='pago' AND ${dateFilter("m.created_at", start, end)}
     UNION ALL
-    SELECT substr(occurred_at,1,10),0,0,0,0,0,amount_cents FROM warehouse_expenses
-    WHERE business_unit_id=${unitId} AND deleted_at IS NULL AND ${dateFilter("occurred_at", start, end)}
+    SELECT substr(paid_at,1,10),0,0,0,0,0,amount_cents FROM warehouse_expenses
+    WHERE business_unit_id=${unitId} AND deleted_at IS NULL AND status='paid' AND ${dateFilter("paid_at", start, end)}
   ) SELECT day, sum(orders) orders, sum(orderCents) orderCents, sum(cashCents) cashCents,
     sum(transferCents) transferCents, sum(otherCents) otherCents, sum(expenseCents) expenseCents
     FROM events GROUP BY day ORDER BY day DESC`;
@@ -78,6 +79,10 @@ function summarize(row) {
 }
 
 export const WarehouseActivityService = {
+  async changeExpenseStatus(unit, id, data, userId) {
+    assertUnit(unit);
+    return runWarehouseTransaction(tx => changeExpensePayment(tx, unit.id, id, data, userId));
+  },
   async stats(unit, query = {}) {
     assertUnit(unit);
     const range = activityPeriod(query.period, query.date);
@@ -88,15 +93,22 @@ export const WarehouseActivityService = {
       for (const day of days) for (const field of Object.keys(total)) total[field] += Number(day[field]);
       const statuses = await rows(tx, sql`SELECT CASE WHEN delivered_at IS NOT NULL THEN 'delivered' WHEN ready_at IS NOT NULL AND status IN ('confirmed','preparing') THEN 'ready' ELSE status END status,
         count(*) count FROM warehouse_orders WHERE business_unit_id=${unit.id} AND ${dateFilter("created_at", range.start, range.end)} GROUP BY 1`);
-      const expenses = await rows(tx, sql`SELECT e.*, (SELECT due_date FROM warehouse_fixed_occurrences f WHERE f.expense_id=e.id) fixed_due_date FROM warehouse_expenses e WHERE business_unit_id=${unit.id} AND deleted_at IS NULL
-        AND ${dateFilter("occurred_at", range.start, range.end)} ORDER BY occurred_at DESC,id DESC`);
-      const pendingExpenses = await rows(tx, sql`SELECT * FROM warehouse_fixed_occurrences WHERE business_unit_id=${unit.id} AND expense_id IS NULL ORDER BY due_date,id`);
+      const allExpenses = await rows(tx, sql`SELECT e.*, f.due_date fixed_due_date, f.id occurrence_id FROM warehouse_expenses e
+        LEFT JOIN warehouse_fixed_occurrences f ON f.expense_id=e.id WHERE e.business_unit_id=${unit.id} AND e.deleted_at IS NULL ORDER BY e.created_at DESC,e.id DESC`);
+      const expenses = allExpenses.filter(e => range.start === null || ((e.status === 'paid' ? e.paid_at : e.occurred_at) >= range.start && (e.status === 'paid' ? e.paid_at : e.occurred_at) < range.end));
+      const pendingExpenses = allExpenses.filter(e => e.status === 'pending' && e.occurrence_id).map(e => ({...e, id:e.occurrence_id, expense_id:e.id, due_date:e.fixed_due_date}));
+      const pendingCents = allExpenses.filter(e => e.status === 'pending').reduce((sum,e)=>sum+e.amount_cents,0);
       const dueDates = await rows(tx,sql`SELECT DISTINCT due_date FROM warehouse_fixed_occurrences WHERE business_unit_id=${unit.id} AND ${dateFilter('due_date',range.start,range.end)}`);
       for (const expense of dueDates) {
         if ((range.start===null || (expense.due_date>=range.start && expense.due_date<range.end)) && !days.some(d=>d.day===expense.due_date)) days.push(summarize({...total,orders:0,orderCents:0,cashCents:0,transferCents:0,otherCents:0,expenseCents:0,day:expense.due_date}));
       }
+      // Las obligaciones variables también deben poder consultarse en días sin cobros.
+      for (const expense of expenses.filter(e=>e.status==='pending')) {
+        const day = expense.occurred_at.slice(0,10);
+        if (!days.some(d=>d.day===day)) days.push(summarize({orders:0,orderCents:0,cashCents:0,transferCents:0,otherCents:0,expenseCents:0,day}));
+      }
       days.sort((a,b)=>b.day.localeCompare(a.day));
-      return { pendingExpenses, ...range, summary: summarize(total), statuses, days, expenses };
+      return { allExpenses, pendingCents, pendingExpenses, ...range, summary: summarize(total), statuses, days, expenses };
     });
   },
   async day(unit, date) {
@@ -119,11 +131,12 @@ export const WarehouseActivityService = {
       const parts = await rows(tx, sql`SELECT d.* FROM account_payment_details d JOIN account_movements m ON m.id=d.account_movement_id
         WHERE m.business_unit_id=${unit.id} AND m.type='pago' AND m.created_at>=${range.start} AND m.created_at<${range.end}`);
       const expenses = await rows(tx, sql`SELECT e.*, (SELECT due_date FROM warehouse_fixed_occurrences f WHERE f.expense_id=e.id) fixed_due_date FROM warehouse_expenses e WHERE business_unit_id=${unit.id} AND deleted_at IS NULL
-        AND occurred_at>=${range.start} AND occurred_at<${range.end} ORDER BY occurred_at DESC,id DESC`);
+        AND (((CASE WHEN status='paid' THEN paid_at ELSE occurred_at END)>=${range.start} AND (CASE WHEN status='paid' THEN paid_at ELSE occurred_at END)<${range.end})
+          OR EXISTS(SELECT 1 FROM warehouse_fixed_occurrences f WHERE f.expense_id=e.id AND f.due_date=${date})) ORDER BY occurred_at DESC,id DESC`);
       const accountSnapshots = await rows(tx,sql`SELECT p.* FROM warehouse_payment_parts p JOIN account_movements m ON m.id=p.account_movement_id WHERE m.business_unit_id=${unit.id} AND m.created_at>=${range.start} AND m.created_at<${range.end}`);
       const paymentDetails = await rows(tx, sql`SELECT p.* FROM warehouse_payment_parts p JOIN warehouse_receipts r ON r.id=p.receipt_id WHERE r.business_unit_id=${unit.id} AND r.occurred_at>=${range.start} AND r.occurred_at<${range.end}`);
-      const fixedOccurrences = await rows(tx,sql`SELECT f.*,e.occurred_at paid_at FROM warehouse_fixed_occurrences f LEFT JOIN warehouse_expenses e ON e.id=f.expense_id WHERE f.business_unit_id=${unit.id} AND f.due_date=${date}`);
-      const pendingExpenses = fixedOccurrences.filter(e=>!e.expense_id);
+      const fixedOccurrences = await rows(tx,sql`SELECT f.*,e.paid_at,e.status FROM warehouse_fixed_occurrences f LEFT JOIN warehouse_expenses e ON e.id=f.expense_id WHERE f.business_unit_id=${unit.id} AND f.due_date=${date}`);
+      const pendingExpenses = fixedOccurrences.filter(e=>e.status==='pending');
       return { fixedOccurrences, pendingExpenses, date, orders: orders.map((o) => ({ ...o, items: items.filter((i) => i.order_id === o.id) })), receipts: receipts.map(r=>({...r,payments:paymentDetails.filter(p=>p.receipt_id===r.id)})),
         accountPayments: accountPayments.map((p) => ({ ...p, payments: parts.filter((d) => d.account_movement_id === p.id), snapshots:accountSnapshots.filter(d=>d.account_movement_id===p.id) })), expenses };
     });
@@ -138,25 +151,31 @@ export const WarehouseActivityService = {
         [previous] = await rows(tx, sql`SELECT * FROM warehouse_expenses WHERE id=${Number(id)} AND business_unit_id=${unit.id}`);
         if (!previous || previous.deleted_at) fail(404, "Gasto no encontrado.");
         const [fixed] = await rows(tx,sql`SELECT id FROM warehouse_fixed_occurrences WHERE expense_id=${previous.id}`);
-        if (fixed) fail(409,'Los gastos fijos pagados conservan su historial y no se pueden editar ni eliminar.');
+        if (fixed) fail(409,'Las obligaciones fijas conservan su historial. Editá su configuración para los próximos períodos.');
         if (data.expectedVersion !== previous.version) fail(409, "El gasto cambió. Actualizá antes de reintentar.");
+        if (!remove && data.status !== undefined && data.status !== previous.status) fail(400, 'Cambiá el estado desde la acción de pago.');
       } else {
         const [duplicate] = await rows(tx, sql`SELECT * FROM warehouse_expenses WHERE business_unit_id=${unit.id} AND idempotency_key=${requestKey}`);
         if (duplicate) return { ...duplicate, duplicated: true };
       }
       let result;
       if (remove) {
-        [result] = await rows(tx, sql`UPDATE warehouse_expenses SET deleted_at=${now},updated_at=${now},version=version+1 WHERE id=${previous.id} RETURNING *`);
+        [result] = await rows(tx, sql`UPDATE warehouse_expenses SET deleted_at=${now},updated_at=${now},version=version+1 WHERE id=${previous.id} AND version=${previous.version} RETURNING *`);
       } else {
         const concept = String(data.concept || "").trim();
         if (!concept || concept.length > 200) fail(400, "Ingresá un concepto de hasta 200 caracteres.");
         const description = String(data.description || "").trim().slice(0, 2000);
         const amount = cents(data.amount), occurred = timestamp(data.occurredAt);
         if (!["cash", "transfer"].includes(data.method)) fail(400, "Seleccioná efectivo o transferencia.");
-        if (previous) [result] = await rows(tx, sql`UPDATE warehouse_expenses SET concept=${concept},description=${description},amount_cents=${amount},method=${data.method},occurred_at=${occurred},updated_at=${now},version=version+1 WHERE id=${previous.id} RETURNING *`);
-        else [result] = await rows(tx, sql`INSERT INTO warehouse_expenses (business_unit_id,concept,description,amount_cents,method,occurred_at,user_id,idempotency_key,created_at,updated_at)
-          VALUES (${unit.id},${concept},${description},${amount},${data.method},${occurred},${userId},${requestKey},${now},${now}) RETURNING *`);
+        if (previous) [result] = await rows(tx, sql`UPDATE warehouse_expenses SET concept=${concept},description=${description},amount_cents=${amount},method=${data.method},occurred_at=${occurred},updated_at=${now},version=version+1 WHERE id=${previous.id} AND version=${previous.version} RETURNING *`);
+        else {
+          if (!['pending','paid'].includes(data.status)) fail(400, 'Seleccioná el estado del gasto.');
+          const paidAt = data.status === 'paid' ? paymentTimestamp(data.paidAt) : null;
+          [result] = await rows(tx, sql`INSERT INTO warehouse_expenses (business_unit_id,concept,description,amount_cents,method,occurred_at,user_id,idempotency_key,created_at,updated_at,status,paid_at,status_changed_at)
+            VALUES (${unit.id},${concept},${description},${amount},${data.method},${occurred},${userId},${requestKey},${now},${now},${data.status},${paidAt},${now}) RETURNING *`);
+        }
       }
+      if (!result) fail(409, 'El gasto cambió. Actualizá antes de reintentar.');
       await tx.run(sql`INSERT INTO warehouse_expense_audit (expense_id,action,snapshot,user_id,created_at)
         VALUES (${result.id},${remove ? "delete" : previous ? "update" : "create"},${JSON.stringify({ before: previous || null, after: result })},${userId},${now})`);
       return result;

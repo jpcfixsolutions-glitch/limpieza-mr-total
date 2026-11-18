@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "../db/client.js";
 import {
   accountMovements, businessUnitProducts, customers, inventoryMovements, products,
-  warehouseOrderItems, warehouseOrders, warehousePurchaseItems, warehousePurchases, warehouseCustomerDetails,
+  warehouseOrderItems, warehouseOrders, warehousePurchaseItems, warehousePurchases, warehouseCustomerDetails, packTypes,
 } from "../db/schema.js";
 import { getArgentinaTime } from "../db/timeUtils.js";
 import { adjustInventoryInTransaction, ensureInventoryBalance } from "./inventory.service.js";
@@ -66,15 +66,15 @@ async function hydratePurchases(rows, executor = db) {
   return rows.map((row) => ({ ...row, items: byPurchase.get(row.id) || [] }));
 }
 
-async function snapshotItems(tx, unitId, rawItems, kind) {
+async function snapshotItems(tx, unitId, rawItems, kind, useCatalogPrices=false) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) throw { status: 400, message: "Agregá al menos un producto." };
   if (rawItems.some((item) => !item || typeof item !== "object" || Array.isArray(item))) throw { status: 400, message: "Los productos del pedido no son válidos." };
   const normalized = rawItems.map((item) => ({
     productId: String(item.productId).startsWith("liquid:") ? String(item.productId) : positiveInteger(item.productId, "El producto"),
     quantity: String(item.productId).startsWith("liquid:") ? (milliliters(item.quantity) > 0 ? milliliters(item.quantity) / 1000 : positiveInteger(0)) : positiveInteger(item.quantity),
-    value: Number(kind === "order" ? (item.unitPrice ?? item.price) : item.unitCost),
+    value: Number(kind === "order" ? (item.unitPrice ?? item.price ?? (useCatalogPrices ? 0 : undefined)) : item.unitCost),
   }));
-  if (normalized.some((item) => !Number.isFinite(item.value) || item.value < 0)) throw { status: 400, message: "Hay un precio o costo inválido." };
+  if (normalized.some((item) => !Number.isFinite(item.value) || item.value < 0)) throw { status: 400, message: "Hay un precio o costo inv\u00e1lido." };
   const liquids = await liquidInventory(tx);
   const ids = [...new Set(normalized.filter(item => typeof item.productId === "number").map((item) => item.productId))];
   const rows = await tx.select({ product: products, inventory: businessUnitProducts })
@@ -87,13 +87,16 @@ async function snapshotItems(tx, unitId, rawItems, kind) {
       if (kind !== "order") throw { status: 400, message: "Registrá el ingreso de líquidos desde Distribución del stock." };
       const p = liquids.find(p => p.id === item.productId);
       if (!p) throw { status: 400, message: "El líquido no pertenece al inventario del Galpón." };
-      return { productId: null, liquidProductId: p.liquidProductId, productName: p.name, quantity: item.quantity, unitPrice: item.value, unitCost: p.cost, total: item.quantity * item.value };
+      const unitPrice = useCatalogPrices ? Number(p.price) : item.value;
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) throw { status: 400, message: "No se pudo preparar el producto del catálogo." };
+      return { productId: null, liquidProductId: p.liquidProductId, productName: p.name, quantity: item.quantity, unitPrice, unitCost: p.cost, total: item.quantity * unitPrice };
     }
     const row = byId.get(item.productId);
     if (!row) throw { status: 400, message: `Producto inexistente (id ${item.productId}).` };
     const inventory = row.inventory;
-    if (!inventory || !inventory.isAvailable) throw { status: 400, message: `"${row.product.name}" no está disponible en el Galpón.` };
-    const unitPrice = kind === "order" ? item.value : 0;
+    if (kind === "order" && (!inventory || !inventory.isAvailable)) throw { status: 400, message: "Producto no disponible en Galp\u00f3n: " + row.product.name };
+    const unitPrice = kind === "order" ? (useCatalogPrices ? Number(inventory.salePrice) : item.value) : 0;
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) throw { status: 400, message: "No se pudo preparar el producto del cat\u00e1logo." };
     const unitCost = kind === "purchase" ? item.value : Number(inventory?.cost ?? 0);
     return { productId: item.productId, productName: row.product.name, quantity: item.quantity, unitPrice, unitCost, total: item.quantity * (kind === "order" ? unitPrice : unitCost) };
   });
@@ -128,14 +131,16 @@ export const WarehouseService = {
       return { productId: id, stock: result.movement.stockAfter, duplicated: false };
     });
   },
-  async operations(unit, previewItems = null) {
+  async operations(unit, previewItems = null, {useCatalogPrices=false}={}) {
     assertWarehouse(unit);
     return runWarehouseTransaction(async (tx) => {
       const orders = await this.listOrders(unit, tx);
       const legacyInventory = await tx.select({
         id: products.id, name: products.name, codbarra: products.codbarra,
         stock: businessUnitProducts.stock, price: businessUnitProducts.salePrice, isAvailable: businessUnitProducts.isAvailable,
+        unitsPerPack:products.unitsPerPack,packTypeName:packTypes.name,
       }).from(businessUnitProducts).innerJoin(products, eq(products.id, businessUnitProducts.productId))
+        .leftJoin(packTypes,eq(products.packTypeId,packTypes.id))
         .where(eq(businessUnitProducts.businessUnitId, unit.id));
       const inventory = [...legacyInventory, ...await liquidInventory(tx)];
       const customerList = await tx.select({
@@ -147,7 +152,7 @@ export const WarehouseService = {
       const { allocations, ...production } = calculateWarehouseProduction(orders, inventory);
       let preview;
       if (previewItems) {
-        const items = (await snapshotItems(tx, unit.id, previewItems, "order")).map(item => ({ ...item, productId: item.liquidProductId ? `liquid:${item.liquidProductId}` : item.productId }));
+        const items = (await snapshotItems(tx, unit.id, previewItems, "order", useCatalogPrices)).map(item => ({ ...item, productId: item.liquidProductId ? "liquid:" + item.liquidProductId : item.productId }));
         const projected = calculateWarehouseProduction([...orders, {
           id: Number.MAX_SAFE_INTEGER, status: "confirmed", createdAt: getArgentinaTime().datetime, items,
         }], inventory);
@@ -218,8 +223,9 @@ export const WarehouseService = {
     return hydrateOrders(rows, executor);
   },
 
-  async createOrder({ customerId, items, observations, chargeToAccount, idempotencyKey, status = "draft" }, userId, unit) {
+  async createOrder({ customerId, items, observations, chargeToAccount, idempotencyKey, status = "draft" }, userId, unit, {useCatalogPrices=false}={}) {
     assertWarehouse(unit);
+    if(useCatalogPrices && (status!=='confirmed'||chargeToAccount)) throw {status:403,message:'Sólo se permite registrar pedidos operativos en preparación.'};
     if (!["draft", "confirmed"].includes(status)) throw { status: 400, message: "Estado inicial inválido." };
     if (status === "confirmed" && !customerId) throw { status: 400, message: "Seleccioná un cliente para registrar el pedido." };
     if (customerId) positiveInteger(customerId, "El cliente");
@@ -227,13 +233,16 @@ export const WarehouseService = {
     return runWarehouseTransaction(async (tx) => {
       if (key) {
         const duplicate = await tx.select().from(warehouseOrders).where(and(eq(warehouseOrders.businessUnitId, unit.id), eq(warehouseOrders.idempotencyKey, key))).then((rows) => rows[0]);
-        if (duplicate) return { ...(await hydrateOrders([duplicate], tx))[0], duplicated: true };
+        if (duplicate) {
+          if(useCatalogPrices && duplicate.userId!==userId) throw {status:409,message:'La clave de operación pertenece a otro pedido.'};
+          return { ...(await hydrateOrders([duplicate], tx))[0], duplicated: true };
+        }
       }
       if (customerId) {
         const customer = await tx.select().from(customers).where(and(eq(customers.id, Number(customerId)), eq(customers.businessUnitId, unit.id), eq(customers.isActive, true))).then((rows) => rows[0]);
         if (!customer) throw { status: 400, message: "El cliente no pertenece al Galpón o está inactivo." };
       }
-      const snapshots = await snapshotItems(tx, unit.id, items, "order");
+      const snapshots = await snapshotItems(tx, unit.id, items, "order",useCatalogPrices);
       const total = snapshots.reduce((sum, item) => sum + item.total, 0);
       const { datetime } = getArgentinaTime();
       const [order] = await tx.insert(warehouseOrders).values({

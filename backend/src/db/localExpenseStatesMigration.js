@@ -1,0 +1,30 @@
+export const localExpenseStatesMigration = {
+  id:'20261116_022_local_expense_states',
+  statements:[
+    "ALTER TABLE fixed_expenses ADD COLUMN active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))",
+    'ALTER TABLE fixed_expenses ADD COLUMN start_period TEXT',
+    'ALTER TABLE fixed_expenses ADD COLUMN version INTEGER NOT NULL DEFAULT 0',
+    "UPDATE fixed_expenses SET start_period=strftime('%Y-%m','now','-3 hours')",
+    "ALTER TABLE daily_expenses ADD COLUMN status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','paid'))",
+    'ALTER TABLE daily_expenses ADD COLUMN paid_at TEXT',
+    'ALTER TABLE daily_expenses ADD COLUMN status_changed_at TEXT',
+    'ALTER TABLE daily_expenses ADD COLUMN payment_register_id INTEGER REFERENCES cash_registers(id)',
+    'ALTER TABLE daily_expenses ADD COLUMN fixed_expense_id INTEGER REFERENCES fixed_expenses(id)',
+    'ALTER TABLE daily_expenses ADD COLUMN period TEXT',
+    'ALTER TABLE daily_expenses ADD COLUMN idempotency_key TEXT',
+    'ALTER TABLE daily_expenses ADD COLUMN version INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE daily_expenses ADD COLUMN user_id INTEGER REFERENCES users(id)',
+    `CREATE TABLE local_expense_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,expense_id INTEGER NOT NULL REFERENCES daily_expenses(id),action TEXT NOT NULL,snapshot TEXT NOT NULL,user_id INTEGER REFERENCES users(id),created_at TEXT NOT NULL)`,
+    `UPDATE daily_expenses SET status_changed_at=datetime('now','-3 hours')`,
+    `INSERT INTO local_expense_audit(expense_id,action,snapshot,created_at)
+      SELECT id,'migration_pending',json_object('reason',reason,'amount',amount,'method',method,'register_id',register_id,'created_at',created_at,'status','pending'),datetime('now','-3 hours') FROM daily_expenses`,
+    'CREATE UNIQUE INDEX local_expense_key ON daily_expenses(idempotency_key) WHERE idempotency_key IS NOT NULL',
+    'CREATE UNIQUE INDEX local_expense_period ON daily_expenses(fixed_expense_id,period) WHERE fixed_expense_id IS NOT NULL',
+    'CREATE INDEX local_expense_paid ON daily_expenses(status,paid_at,payment_register_id)',
+    `INSERT INTO daily_expenses(reason,amount,method,created_at,status_changed_at,fixed_expense_id,period,idempotency_key)
+      SELECT name,amount,'efectivo',datetime('now','-3 hours'),datetime('now','-3 hours'),id,start_period,'fixed:'||id||':'||start_period FROM fixed_expenses WHERE amount>0`,
+    `INSERT INTO local_expense_audit(expense_id,action,snapshot,created_at) SELECT id,'migration_obligation',json_object('status','pending','period',period,'amount',amount),datetime('now','-3 hours') FROM daily_expenses WHERE fixed_expense_id IS NOT NULL`,
+    `CREATE TRIGGER local_expense_state_insert BEFORE INSERT ON daily_expenses WHEN (NEW.status='paid' AND NEW.paid_at IS NULL) OR (NEW.status='pending' AND (NEW.paid_at IS NOT NULL OR NEW.payment_register_id IS NOT NULL)) BEGIN SELECT RAISE(ABORT,'Estado y pago inconsistentes'); END`,
+    `CREATE TRIGGER local_expense_state_update BEFORE UPDATE ON daily_expenses WHEN (NEW.status='paid' AND NEW.paid_at IS NULL) OR (NEW.status='pending' AND (NEW.paid_at IS NOT NULL OR NEW.payment_register_id IS NOT NULL)) BEGIN SELECT RAISE(ABORT,'Estado y pago inconsistentes'); END`,
+  ],
+};

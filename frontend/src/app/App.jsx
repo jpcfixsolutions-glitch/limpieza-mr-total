@@ -233,7 +233,9 @@ export default function App() {
 
         {businessUnit === "WAREHOUSE" && activeView === "warehouse-home" && (isEmployee ? <WarehouseOrdersView user={user} employeeHome /> : <WarehouseHomeView user={user} />)}
         {businessUnit === "WAREHOUSE" && activeView === "warehouse-orders" && <WarehouseOrdersView user={user} />}
-        {businessUnit === "WAREHOUSE" && activeView === "warehouse-stock" && <WarehouseLiquidStockView employee={isEmployee} />}
+          {businessUnit === "WAREHOUSE" && activeView === "warehouse-stock" && (isEmployee
+            ? <div className="flex-1 min-w-0 overflow-y-auto"><WarehouseEmployeeStockView /><WarehouseLiquidStockView employee /></div>
+            : <WarehouseLiquidStockView />)}
         {businessUnit === "WAREHOUSE" && user.role === "admin" && activeView === "warehouse-customers" && <WarehouseCustomersView />}
         {businessUnit === "WAREHOUSE" && user.role === "admin" && activeView === "warehouse-settings" && <WarehouseSettingsView />}
         {businessUnit === "WAREHOUSE" && user.role === "admin" && activeView === "warehouse-stats" && <WarehouseStatsView />}

@@ -30,7 +30,7 @@ before(async () => {
   ], "write");
 });
 
-after(async () => { client?.close(); if (testDirectory) await rm(testDirectory, { recursive: true, force: true }); });
+after(async () => { client?.close(); if (testDirectory) await rm(testDirectory, { recursive: true, force: true, maxRetries:5, retryDelay:100 }); });
 
 test("extrae varios productos, conserva el costo histórico y no genera movimientos financieros", async () => {
   const result = await ProductExtractionService.create({

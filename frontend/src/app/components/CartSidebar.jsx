@@ -1,8 +1,10 @@
 import { Plus, Minus, Trash2, CreditCard, X } from "lucide-react";
+import { useState } from "react";
 import { maxQuantityForLine, saleLabel } from "../../utils/pack.js";
 import { formatCatalogPrice } from "../../utils/price.js";
 
 export function CartSidebar({ items, onUpdateQuantity, onRemoveItem, onCheckout, isMobileOpen, onMobileClose, getMaxQuantity }) {
+  const [quantityDrafts, setQuantityDrafts] = useState({});
   const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -16,6 +18,7 @@ export function CartSidebar({ items, onUpdateQuantity, onRemoveItem, onCheckout,
       ) : (
         items.map((item) => {
           const maxQty = getMaxQuantity?.(item) ?? maxQuantityForLine(items, item);
+          const quantityValue = Object.hasOwn(quantityDrafts, item.lineId) ? quantityDrafts[item.lineId] : String(item.quantity);
           return (
           <div key={item.lineId} className="bg-background rounded-lg p-4 shadow-sm border border-surface">
             <div className="flex items-start justify-between mb-3">
@@ -31,28 +34,31 @@ export function CartSidebar({ items, onUpdateQuantity, onRemoveItem, onCheckout,
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 bg-surface rounded-lg p-1">
                 <button
-                  onClick={() => onUpdateQuantity(item.lineId, item.quantity - 1)}
+                  onClick={() => { setQuantityDrafts((drafts) => { const next = { ...drafts }; delete next[item.lineId]; return next; }); onUpdateQuantity(item.lineId, item.quantity - 1); }}
                   disabled={item.quantity <= 1}
                   className="w-8 h-8 flex items-center justify-center text-foreground hover:bg-background disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors"
                 >
                   <Minus size={16} />
                 </button>
                 <input
-                  type="number"
-                  min="1"
-                  max={maxQty}
-                  step="1"
-                  value={item.quantity}
-                  onFocus={(event) => event.target.select()}
+                  type="text"
+                  inputMode="numeric"
+                  value={quantityValue}
+                  onFocus={(event) => { setQuantityDrafts((drafts) => ({ ...drafts, [item.lineId]: String(item.quantity) })); event.target.select(); }}
                   onChange={(event) => {
-                    const quantity = Number(event.target.value);
-                    if (Number.isInteger(quantity) && quantity > 0) onUpdateQuantity(item.lineId, quantity);
+                    const raw = event.target.value;
+                    setQuantityDrafts((drafts) => ({ ...drafts, [item.lineId]: raw }));
+                    if (!/^\d+$/.test(raw)) return;
+                    const quantity = Number(raw);
+                    if (Number.isSafeInteger(quantity) && quantity > 0 && quantity <= maxQty) onUpdateQuantity(item.lineId, quantity);
                   }}
+                  onBlur={() => setQuantityDrafts((drafts) => { const next = { ...drafts }; delete next[item.lineId]; return next; })}
+                  onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
                   aria-label={`Cantidad de ${item.name}`}
                   className="w-14 h-8 rounded-md border border-foreground/15 bg-background px-1 text-center text-sm font-bold text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                 />
                 <button
-                  onClick={() => onUpdateQuantity(item.lineId, item.quantity + 1)}
+                  onClick={() => { setQuantityDrafts((drafts) => { const next = { ...drafts }; delete next[item.lineId]; return next; }); onUpdateQuantity(item.lineId, item.quantity + 1); }}
                   disabled={item.quantity >= maxQty}
                   className="w-8 h-8 flex items-center justify-center text-foreground hover:bg-background disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors"
                 >
@@ -98,7 +104,7 @@ export function CartSidebar({ items, onUpdateQuantity, onRemoveItem, onCheckout,
           <h2 className="text-primary font-bold text-2xl">Carrito</h2>
           <p className="text-foreground/70 font-medium text-sm mt-1">{itemCount} productos</p>
         </div>
-        <ItemsList />
+        {ItemsList()}
         <Footer />
       </div>
 
@@ -129,7 +135,7 @@ export function CartSidebar({ items, onUpdateQuantity, onRemoveItem, onCheckout,
                 <X size={22} />
               </button>
             </div>
-            <ItemsList />
+            {ItemsList()}
             <Footer />
           </div>
         </div>

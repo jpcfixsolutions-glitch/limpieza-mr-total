@@ -242,6 +242,7 @@ export const productPriceTiers = sqliteTable("product_price_tiers", {
 // ─── Gastos fijos ─────────────────────────────────────────────────────────────
 
 export const fixedExpenses = sqliteTable("fixed_expenses", {
+  active: integer('active').notNull().default(1), startPeriod: text('start_period'), version: integer('version').notNull().default(0),
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
   amount: real("amount").notNull(),
@@ -250,6 +251,11 @@ export const fixedExpenses = sqliteTable("fixed_expenses", {
 // ─── Gastos diarios ───────────────────────────────────────────────────────────
 
 export const dailyExpenses = sqliteTable("daily_expenses", {
+  status:text('status',{enum:['pending','paid']}).notNull().default('pending'),
+  paidAt:text('paid_at'), statusChangedAt:text('status_changed_at'),
+  paymentRegisterId:integer('payment_register_id').references(()=>cashRegisters.id),
+  fixedExpenseId:integer('fixed_expense_id').references(()=>fixedExpenses.id), period:text('period'),
+  idempotencyKey:text('idempotency_key'),version:integer('version').notNull().default(0),userId:integer('user_id').references(()=>users.id),
   id: integer("id").primaryKey({ autoIncrement: true }),
   reason: text("reason").notNull(),
   amount: real("amount").notNull(),
@@ -263,6 +269,10 @@ export const dailyExpenses = sqliteTable("daily_expenses", {
 });
 
 // ─── Modificaciones de stock ──────────────────────────────────────────────────
+export const localExpenseAudit = sqliteTable('local_expense_audit',{
+  id:integer('id').primaryKey({autoIncrement:true}),expenseId:integer('expense_id').notNull().references(()=>dailyExpenses.id),
+  action:text('action').notNull(),snapshot:text('snapshot').notNull(),userId:integer('user_id').references(()=>users.id),createdAt:text('created_at').notNull(),
+});
 
 export const stockModifications = sqliteTable("stock_modifications", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -382,6 +392,8 @@ export const warehouseReceipts = sqliteTable("warehouse_receipts", {
 }, (t) => [uniqueIndex("warehouse_receipts_unit_key").on(t.businessUnitId, t.idempotencyKey)]);
 
 export const warehouseExpenses = sqliteTable("warehouse_expenses", {
+  status: text("status", { enum: ["pending", "paid"] }).notNull().default("pending"),
+  paidAt: text("paid_at"), statusChangedAt: text("status_changed_at"),
   id: integer("id").primaryKey({ autoIncrement: true }),
   businessUnitId: integer("business_unit_id").notNull().references(() => businessUnits.id),
   concept: text("concept").notNull(), description: text("description"),
@@ -498,6 +510,7 @@ export const warehouseFixedExpenses = sqliteTable('warehouse_fixed_expenses', {
   startDate:text('start_date').notNull(),nextDue:text('next_due').notNull(),active:integer('active').notNull().default(1),version:integer('version').notNull().default(0),
 },t=>[uniqueIndex('warehouse_fixed_name').on(t.businessUnitId,t.nameKey)]);
 export const warehouseFixedOccurrences = sqliteTable('warehouse_fixed_occurrences', {
+  createdAt:text('created_at'),
   id:integer('id').primaryKey({autoIncrement:true}),businessUnitId:integer('business_unit_id').notNull().references(()=>businessUnits.id),
   fixedExpenseId:integer('fixed_expense_id').notNull().references(()=>warehouseFixedExpenses.id),dueDate:text('due_date').notNull(),
   concept:text('concept').notNull(),description:text('description').notNull(),amountCents:integer('amount_cents').notNull(),
