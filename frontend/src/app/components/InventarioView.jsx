@@ -11,6 +11,7 @@ import { PromotionModal } from "./PromotionModal.jsx";
 import { ProductExtractionModal } from "./ProductExtractionModal.jsx";
 import { filterCategories } from "../../utils/categorySearch.js";
 import { normalizeProductSearch, searchProducts } from "../../utils/productSearch.js";
+import { promotionCategoryNames, promotionMatchesCategory, withPromotionsCategory } from "../../utils/promotionCategories.js";
 
 const EMPTY_PRODUCT = { name: "", codbarra: "", price: "", wholesalePrice: "", cost: "", targetProfitability: "40", targetWholesaleProfitability: "", categoryId: null, priceGroupId: null, stock: "", minStock: "", unitsPerPack: "", packPrice: "", packTypeId: null, priceTiers: [], fulfillmentMode: "OWN_STOCK" };
 const PRODUCT_DRAFT_STORAGE_KEY = "descartables-yofre:product-draft";
@@ -257,10 +258,10 @@ export function InventarioView() {
     [categories]
   );
   const categoryFilterOptions = useMemo(() => {
-    return filterCategories(sortedCategories, categoryQuery);
+    return filterCategories(withPromotionsCategory(sortedCategories).sort((a, b) => byNameEs(a.name, b.name)), categoryQuery);
   }, [sortedCategories, categoryQuery]);
   const selectedCategory = useMemo(
-    () => sortedCategories.find((category) => String(category.id) === String(selectedCategoryId)) || null,
+    () => withPromotionsCategory(sortedCategories).find((category) => String(category.id) === String(selectedCategoryId)) || null,
     [sortedCategories, selectedCategoryId]
   );
   const activeCategoryOptionIndex = Math.min(activeCategoryIndex, categoryFilterOptions.length);
@@ -291,14 +292,15 @@ export function InventarioView() {
   const filteredRows = useMemo(() => {
     const term = normalizeSearch(searchTerm);
     const code = searchTerm.trim();
-    const promotionRows = selectedCategoryId == null && groupFilter === "todos"
+    const promotionRows = groupFilter === "todos"
       ? promotions
+        .filter((promotion) => promotionMatchesCategory(promotion, selectedCategory, inventory))
         .filter((promotion) => !term || normalizeSearch(`${promotion.name} ${promotion.description || ""}`).includes(term) || promotion.items.some((item) => normalizeSearch(item.name).includes(term) || String(item.codbarra || "").includes(code)))
         .map((promotion) => ({ ...promotion, rowType: "promotion", rowId: `promotion-${promotion.id}` }))
       : [];
     const rows = [...filteredInventory.map((product) => ({ ...product, rowType: "product", rowId: `product-${product.id}` })), ...promotionRows];
     return term ? rows : rows.sort((a, b) => byNameEs(a.name, b.name));
-  }, [filteredInventory, promotions, searchTerm, selectedCategoryId, groupFilter]);
+  }, [filteredInventory, promotions, inventory, searchTerm, selectedCategory, groupFilter]);
 
   useEffect(() => { setPage(1); }, [searchTerm, selectedCategoryId, groupFilter]);
 
@@ -849,6 +851,8 @@ export function InventarioView() {
               {paged.slice.map((row) => {
                 if (row.rowType === "promotion") {
                   const hasStock = Number(row.availableQuantity) > 0;
+                  const profitability = calculateProfitabilityPercent(row.cost, row.price);
+                  const categoryLabel = promotionCategoryNames(row, inventory).join(" · ");
                   const detail = [
                     row.items.map((item) => `${item.quantity}× ${item.name}`).join(" · "),
                     row.description,
@@ -856,13 +860,17 @@ export function InventarioView() {
                   return (
                     <tr key={row.rowId} className="border-b border-foreground/15 bg-primary/[0.06] hover:bg-primary/[0.1] transition-colors">
                       <td className="p-4"><span className="block w-4 h-4" title="Las promociones no participan de la selección masiva" /></td>
-                      <td className="p-4 min-w-[260px] max-w-[420px] align-top"><div className="flex items-center gap-2 min-w-0" title={detail}><span className="text-foreground font-bold block truncate leading-snug">{row.name}</span><span className="shrink-0 bg-primary/15 text-primary px-2 py-0.5 rounded-full text-[10px] font-black uppercase">Promo</span></div></td>
+                      <td className="p-4 min-w-[260px] max-w-[420px] align-top"><div className="flex items-center gap-2 min-w-0" title={detail}><span className="text-foreground font-bold block truncate leading-snug">{row.name}</span><span className="shrink-0 bg-primary/15 text-primary px-2 py-0.5 rounded-full text-[10px] font-black uppercase">Promoción</span></div></td>
                       <td className="p-3 text-center whitespace-nowrap"><div className="flex items-center justify-center gap-2"><button onClick={() => { setEditingPromotion(row); setPromotionModalOpen(true); }} className="text-primary hover:text-secondary transition-colors p-1" title="Editar promoción"><Edit2 size={18} /></button><button onClick={() => handleDeletePromotion(row)} className="text-foreground/60 hover:text-red-500 transition-colors p-1" title="Eliminar promoción"><Trash2 size={18} /></button></div></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
-                      <td className="p-4 max-w-[140px]"><span className="text-foreground/40 font-medium text-sm">—</span></td>
+                      <td className="p-4 max-w-[140px]"><span className="block max-w-[140px] truncate text-foreground/80 font-medium text-sm" title={categoryLabel}>{categoryLabel}</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground font-bold">${formatCatalogPrice(row.cost || 0)}</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground font-black">${formatCatalogPrice(row.price)}</span></td>
-                      <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
+                      <td className="p-4 whitespace-nowrap">
+                        {profitability == null
+                          ? <span className="text-foreground/50 font-medium text-sm">Sin costo</span>
+                          : <span className={`font-black ${profitability >= 40 ? "text-success" : profitability >= 0 ? "text-yellow-700" : "text-red-600"}`}>{profitability.toFixed(2)}%</span>}
+                      </td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground font-bold">{row.availableQuantity} u.</span></td>
                       <td className="p-4 whitespace-nowrap"><span className="text-foreground/40 font-medium text-sm">—</span></td>
                       <td className="p-3"><span className={`inline-flex items-center justify-center whitespace-nowrap shrink-0 px-2 py-0.5 rounded-full text-[11px] font-bold leading-none ${hasStock ? "bg-success/10 text-success" : "bg-red-500/15 text-red-600"}`}>{hasStock ? "OK" : "Sin stock"}</span></td>

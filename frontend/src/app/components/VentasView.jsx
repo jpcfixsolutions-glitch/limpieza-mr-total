@@ -13,6 +13,7 @@ import { formatCatalogPrice } from "../../utils/price.js";
 import { ACCOUNT_METHOD_NAME } from "../constants.js";
 import { PaginationBar, paginate, byNameEs } from "./PaginationBar.jsx";
 import { normalizeProductSearch, searchProducts } from "../../utils/productSearch.js";
+import { promotionMatchesCategory, withPromotionsCategory } from "../../utils/promotionCategories.js";
 
 import { OpenCajaModal } from "./OpenCajaModal.jsx";
 import { PromotionCard } from "./PromotionCard.jsx";
@@ -55,7 +56,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
       setProducts(pRes.data.map((p) => p.fulfillmentMode === "WAREHOUSE_DIRECT" ? { ...p, localStock: p.stock, stock: p.warehouseStock, stockSource: "Galpón" } : p));
       setPaymentMethods(mRes.data);
       setCategories(
-        cRes.data
+        withPromotionsCategory(cRes.data)
           .map((c) => c.name)
           .sort(byNameEs)
       );
@@ -74,10 +75,10 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
   }, [products, searchTerm, selectedCategory]);
 
   const filteredPromotions = useMemo(() => {
-    if (selectedCategory !== "Todos") return [];
     const term = normalizeProductSearch(searchTerm);
-    return promotions.filter((promotion) => !term || searchProducts([{ name: promotion.name }, ...promotion.items], term).length > 0);
-  }, [promotions, searchTerm, selectedCategory]);
+    return promotions.filter((promotion) => promotionMatchesCategory(promotion, selectedCategory === "Todos" ? null : { name: selectedCategory }, products)
+      && (!term || searchProducts([{ name: promotion.name }, ...promotion.items], term).length > 0));
+  }, [promotions, products, searchTerm, selectedCategory]);
 
   useEffect(() => { setPage(1); }, [searchTerm, selectedCategory]);
 
@@ -405,7 +406,7 @@ export function VentasView({ isCajaOpen, onAddTransaction, onSyncCaja, onOpenCaj
         </div>
 
         <div className="flex flex-col gap-3">
-          {filteredProducts.length === 0 && (
+          {filteredProducts.length === 0 && filteredPromotions.length === 0 && (
             <div className="text-foreground/60 font-medium text-center py-12">
               <p>No hay productos disponibles{searchTerm.trim() ? " para esta búsqueda" : ""}.</p>
               {selectedCategory !== "Todos" && (
