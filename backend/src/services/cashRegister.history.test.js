@@ -10,7 +10,7 @@ before(async () => {
   schema = await import("../db/schema.js");
   ({ CashRegisterService } = await import("./cashRegister.service.js"));
   // Base aislada: mismas columnas que producción, sin tocar datos reales.
-  for (const name of ["cashRegisters", "transactions", "transactionPayments", "transactionItems", "dailyExpenses", "accountMovements", "accountPaymentDetails"]) {
+  for (const name of ["cashRegisters", "transactions", "transactionPayments", "transactionItems", "dailyExpenses", "localExpensePayments", "accountMovements", "accountPaymentDetails"]) {
     const table = schema[name];
     const columns = Object.values(getTableColumns(table))
       .map((column) => `"${column.name}" ${column.getSQLType()}`);
@@ -46,6 +46,7 @@ test("historial por lotes conserva detalles, gastos y cobros separados por caja"
     { transactionId: 20, productName: "Producto B", price: 40, quantity: 1, total: 40 },
   ]);
   await db.insert(schema.dailyExpenses).values({ id: 1, registerId: 1, paymentRegisterId:1, status:'paid', paidAt:'2026-11-07 12:00:00', reason: "Gasto", method: "efectivo", amount: 10 });
+  await db.insert(schema.localExpensePayments).values({id:1,expenseId:1,amountCents:1000,method:'efectivo',paidAt:'2026-11-07 12:00:00',paymentRegisterId:1,idempotencyKey:'test-history',createdAt:'2026-11-07 12:00:00'});
   await db.insert(schema.accountMovements).values([
     { id: 1, customerId: 1, registerId: 1, type: "pago", amount: 20, methodName: "Efectivo" },
     { id: 2, customerId: 1, registerId: 2, type: "pago", amount: 50, methodName: "Mixto" },

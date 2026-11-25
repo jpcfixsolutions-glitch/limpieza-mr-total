@@ -27,3 +27,7 @@ El esquema anterior del Local sólo tenía nombre e importe para gastos fijos, s
 4. Reiniciar backend/frontend local y recargar el navegador. Revisar manualmente qué pagos anteriores corresponden y confirmarlos con su fecha efectiva.
 
 Si falla el batch, no se registra la migración y sus sentencias se revierten. No usar reset/seed para recuperarse. Preservar el respaldo y cualquier operación posterior antes de preparar una reparación incremental. El sistema Local sigue conectado a la base definida por su `.env`; ejecutar en localhost no convierte automáticamente Turso en una base local.
+
+## Actualización: pagos parciales
+
+La migración 023 incorpora cuotas e historial sin alterar los importes originales ni reiniciar estados. A partir de esta versión los reportes se basan en `local_expense_payments`, y el estado parcial se deriva del saldo. Los detalles y el procedimiento de despliegue actualizado están en [local-pagos-parciales.md](local-pagos-parciales.md); sus instrucciones reemplazan las referencias anteriores al pago único.

@@ -1,6 +1,7 @@
+import { paymentMovements } from './dailyExpense.model.js';
 import { eq, desc, and, getTableColumns } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { cashRegisters, transactions, transactionPayments, transactionItems, dailyExpenses, accountMovements } from "../db/schema.js";
+import { cashRegisters, transactions, transactionPayments, transactionItems, accountMovements } from "../db/schema.js";
 import { AccountMovementModel } from "./accountMovement.model.js";
 
 export const CashRegisterModel = {
@@ -41,9 +42,7 @@ export const CashRegisterModel = {
       db.select(getTableColumns(transactionItems)).from(transactionItems)
         .innerJoin(transactions, eq(transactionItems.transactionId, transactions.id))
         .innerJoin(cashRegisters, eq(transactions.registerId, cashRegisters.id)).where(closed),
-      db.select(getTableColumns(dailyExpenses)).from(dailyExpenses)
-        .innerJoin(cashRegisters, eq(dailyExpenses.paymentRegisterId, cashRegisters.id))
-        .where(and(closed,eq(dailyExpenses.status,'paid'))).orderBy(desc(dailyExpenses.paidAt)),
+      paymentMovements(),
       db.select(getTableColumns(accountMovements)).from(accountMovements)
         .innerJoin(cashRegisters, eq(accountMovements.registerId, cashRegisters.id))
         .where(and(closed, eq(accountMovements.type, "pago")))

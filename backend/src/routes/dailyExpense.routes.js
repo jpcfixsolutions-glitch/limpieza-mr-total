@@ -10,4 +10,5 @@ router.get("/", authenticate, requireBusinessUnit("LOCAL"), DailyExpenseControll
 router.post("/", authenticate, requireBusinessUnit("LOCAL"), DailyExpenseController.create);
 router.patch('/:id/status', authenticate, requireBusinessUnit('LOCAL'), requireRole('admin','cajero'), DailyExpenseController.changeStatus);
 
+router.post('/:id/payments', authenticate, requireBusinessUnit('LOCAL'), requireRole('admin','cajero'), DailyExpenseController.registerPayment);
 export default router;

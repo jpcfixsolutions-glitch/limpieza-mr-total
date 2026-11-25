@@ -561,3 +561,12 @@ export const warehouseStockOptionsAudit = sqliteTable('warehouse_stock_options_a
   userId: integer('user_id').notNull().references(()=>users.id), beforeJson: text('before_json').notNull(), afterJson: text('after_json').notNull(),
   createdAt: text('created_at').default(sql`(datetime('now'))`),
 });
+
+export const localExpensePayments = sqliteTable('local_expense_payments', {
+  id:integer('id').primaryKey({autoIncrement:true}),
+  expenseId:integer('expense_id').notNull().references(()=>dailyExpenses.id),
+  amountCents:integer('amount_cents').notNull(), method:text('method').notNull(), paidAt:text('paid_at').notNull(),
+  paymentRegisterId:integer('payment_register_id').references(()=>cashRegisters.id),
+  observation:text('observation').notNull().default(''), idempotencyKey:text('idempotency_key').notNull().unique(),
+  userId:integer('user_id').references(()=>users.id), createdAt:text('created_at').notNull(), reversedAt:text('reversed_at'),
+});

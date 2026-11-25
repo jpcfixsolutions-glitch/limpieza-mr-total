@@ -7,7 +7,6 @@ import {
   transactionPayments,
   transactionItems,
   categories,
-  dailyExpenses,
   stockModifications,
   internalWithdrawals,
   productExtractions,
@@ -316,7 +315,7 @@ export const StatsService = {
     }
 
     // Extracciones / gastos del día
-    const dailyExpList = await DailyExpenseModel.findAll();
+    const dailyExpList = (await DailyExpenseModel.findAll()).flatMap(e=>[...(e.balance>0?[{...e,status:'pending',amount:e.balance}]:[]),...e.payments.filter(p=>!p.reversedAt).map(p=>({...e,...p,id:`${e.id}:${p.id}`,status:'paid'}))]);
     for (const expense of dailyExpList) {
       logs.push({
         id: `expense-${expense.id}`,

@@ -2,6 +2,10 @@ import { DailyExpenseService } from "../services/dailyExpense.service.js";
 import { sendControllerError } from "./controllerError.js";
 
 export const DailyExpenseController = {
+  async registerPayment(req,res) {
+    try {res.status(201).json(await DailyExpenseService.registerPayment(req.params.id,req.body,req.user.id));}
+    catch(err) {sendControllerError(res,err);}
+  },
   async changeStatus(req,res) {
     try { res.json(await DailyExpenseService.changeStatus(req.params.id,req.body,req.user.id)); }
     catch(err) { sendControllerError(res,err); }

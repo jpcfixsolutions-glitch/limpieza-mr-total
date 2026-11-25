@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import { before,after,test } from 'node:test';
 import { mkdtemp,rm } from 'node:fs/promises';
@@ -10,7 +11,7 @@ import { getTableColumns,getTableName } from 'drizzle-orm';
 let client,db,daily,fixed,CashRegisterService,directory;
 before(async()=>{
   directory=await mkdtemp(path.join(tmpdir(),'local-expense-states-'));
-  process.env.TURSO_DATABASE_URL=`file:${path.join(directory,'test.db').replaceAll('\\','/')}`;
+  process.env.TURSO_DATABASE_URL=pathToFileURL(path.join(directory,'test.db')).href;
   process.env.TURSO_AUTH_TOKEN='';process.env.JWT_SECRET='local-expense-tests';
   ({client,db}=await import('../db/client.js'));
   ({DailyExpenseService:daily}=await import('./dailyExpense.service.js'));
@@ -37,6 +38,8 @@ before(async()=>{
   }
   const {localExpenseStatesMigration}=await import('../db/localExpenseStatesMigration.js');
   await client.batch(localExpenseStatesMigration.statements,'write');
+  const {localPartialPaymentsMigration}=await import('../db/localPartialPaymentsMigration.js');
+  await client.batch(localPartialPaymentsMigration.statements,'write');
 });
 after(async()=>{client?.close();if(directory)await rm(directory,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
 
@@ -123,5 +126,30 @@ test('endpoints Local exigen sesión, rol y aislamiento de unidad',async()=>{
     assert.equal((await fetch(url,{...request,headers:{...headers,'X-Business-Unit':'WAREHOUSE'}})).status,403);
     assert.equal((await fetch(url,{...request,headers:{...headers,Authorization:`Bearer ${jwt.sign({id:3,role:'EMPLEADO_GALPON'},process.env.JWT_SECRET)}`}})).status,403);
     assert.equal((await fetch(url,request)).status,200);
+    const expense=await daily.create({reason:'Pago HTTP parcial',amount:100,method:'transferencia',status:'pending',idempotencyKey:'http-partial'},1);
+    const paymentUrl=url.replace('/1/status', '/'+expense.id+'/payments');
+    const body={amount:25,expectedVersion:expense.version,method:'transferencia',paidAt:'2026-11-12T12:00',observation:'HTTP',idempotencyKey:'http-payment'};
+    const post={method:'POST',headers,body:JSON.stringify(body)};
+    assert.equal((await fetch(paymentUrl,{...post,headers:{}})).status,401);
+    assert.equal((await fetch(paymentUrl,{...post,headers:{...headers,'X-Business-Unit':'WAREHOUSE'}})).status,403);
+    assert.equal((await fetch(paymentUrl,{...post,headers:{...headers,Authorization:'Bearer '+jwt.sign({id:3,role:'EMPLEADO_GALPON'},process.env.JWT_SECRET)}})).status,403);
+    const first=await fetch(paymentUrl,post);assert.equal(first.status,201);assert.equal((await first.json()).balance,75);
+    const retry=await fetch(paymentUrl,post);assert.equal(retry.status,201);assert.equal((await retry.json()).payments.length,1);
+    const stale=await fetch(paymentUrl,{...post,body:JSON.stringify({...body,idempotencyKey:'http-stale'})});assert.equal(stale.status,409);
+    const reload=await fetch(url.replace('/1/status',''),{headers});assert.equal((await reload.json()).find(e=>e.id===expense.id).balance,75);
   } finally {await new Promise(r=>server.close(r));}
+});
+
+
+test('cuotas en efectivo corrigen sólo la caja efectiva y completar no vuelve a descontar el original',async()=>{
+  const before=(await CashRegisterService.getClosed()).find(c=>c.id===1);
+  let e=await daily.create({reason:'Cuotas en caja cerrada',amount:90,method:'efectivo',status:'pending',idempotencyKey:'cash-installments'},1);
+  const pay=amount=>daily.registerPayment(e.id,{amount,method:'efectivo',paidAt:'2026-11-03T12:00',expectedVersion:e.version,idempotencyKey:'cash-'+amount},1);
+  e=await pay(30);
+  const partial=(await CashRegisterService.getClosed()).find(c=>c.id===1);
+  assert.equal(partial.totalGastosEfectivo,before.totalGastosEfectivo+30);assert.equal(partial.expectedCash,before.expectedCash-30);
+  e=await pay(60);
+  const full=(await CashRegisterService.getClosed()).find(c=>c.id===1);
+  assert.equal(full.totalGastosEfectivo,before.totalGastosEfectivo+90);assert.equal(full.expectedCash,before.expectedCash-90);
+  assert.equal(full.recordedExpectedCash,before.recordedExpectedCash);assert.equal(e.amount,90);
 });

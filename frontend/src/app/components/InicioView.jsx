@@ -134,7 +134,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
   });
 
   const ventasHoy = isCajaOpen ? transactions.reduce((sum, t) => sum + t.total, 0) : 0;
-  const totalExpenses = sumExpenses(expenses.filter(e=>e.status==='pending'));
+  const totalExpenses = sumExpenses(expenses.map(e=>({amount:e.balance})));
 
   const handleConfirmOpen = async (amount) => {
     try {
@@ -325,7 +325,7 @@ export function InicioView({ isCajaOpen, onOpenCaja, onCloseCaja, transactions, 
               ) : (
                 expenses.map((expense) => (
                   <div key={expense.id} className="flex items-center justify-between">
-                    <span className="text-foreground/80 font-medium">{expense.reason} · {expense.status==='paid'?'Pagado':'Pendiente'}</span>
+                    <span className="text-foreground/80 font-medium">{expense.reason} · {expense.status==='paid'?'Pagado':expense.status==='partial'?'Parcialmente pagado':'Pendiente'}</span>
                     <span className="text-foreground font-bold">${expense.amount.toLocaleString()}</span>
                   </div>
                 ))
